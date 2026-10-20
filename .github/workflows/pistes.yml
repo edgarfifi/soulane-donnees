@@ -14,6 +14,10 @@ on:
         description: "Publier même si les chiffres s'écartent beaucoup de la fois précédente"
         type: boolean
         default: false
+      crochet:
+        description: "Appeler le crochet de soulane.app même sans nouvelle version (essai ; le site ne se reconstruit que si ses pistes sont en retard)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -59,8 +63,10 @@ jobs:
           FORCER: ${{ inputs.forcer && '1' || '' }}
         run: node outils/publier.mjs tuiles
 
+      # Crochet de déploiement Vercel (créé le 20/10/2026 avec l'accord d'Edgar, secret VERCEL_DEPLOY_HOOK) : le site se
+      # reconstruit même si personne n'envoie de code ; scripts/vercel-ignore.mjs ne construit que si les pistes ont changé.
       - name: Demander la reconstruction de soulane.app (si un crochet de déploiement est rangé en secret)
-        if: steps.publier.outputs.publie == '1'
+        if: steps.publier.outputs.publie == '1' || inputs.crochet
         env:
           HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
         run: |
