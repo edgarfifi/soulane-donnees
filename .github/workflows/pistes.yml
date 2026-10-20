@@ -1,0 +1,87 @@
+# Refait les tuiles des pistes de ski de Soulane chaque semaine, à partir du fichier quotidien d'OpenSnowMap
+# (© contributeurs OpenStreetMap, ODbL), et les publie en version de ce dépôt : soulane.app reprend la dernière à sa
+# construction suivante (/donnees/pistes/z/x/y.pbf). Dépôt public : minutes gratuites ; GITHUB_TOKEN suffit.
+# Fichier tenu dans le dépôt de l'app Soulane (scripts/soulane-donnees/), envoyé ici par scripts/pistes-outil.mjs --publier.
+name: Pistes de ski
+
+on:
+  schedule:
+    # Lundi 5 h 23 (UTC) : le fichier d'OpenSnowMap est refait chaque nuit vers 2 h 30.
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      forcer:
+        description: "Publier même si les chiffres s'écartent beaucoup de la fois précédente"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: pistes
+  cancel-in-progress: false
+
+jobs:
+  pistes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Télécharger le fichier d'OpenSnowMap
+        id: source
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 4 --retry-delay 60 --retry-all-errors --max-time 1500 \
+            -A "Soulane-donnees (+https://github.com/${GITHUB_REPOSITORY})" \
+            -D entetes.txt -o planet_pistes.osm.gz https://www.opensnowmap.org/download/planet_pistes.osm.gz
+          gzip -t planet_pistes.osm.gz
+          DATE=$(grep -i '^last-modified:' entetes.txt | tail -1 | cut -d' ' -f2- | tr -d '\r')
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          ls -l planet_pistes.osm.gz
+          echo "Fichier du : $DATE"
+
+      - name: Fabriquer les tuiles
+        env:
+          PISTES_SOURCE_DATE: ${{ steps.source.outputs.date }}
+        run: node --max-old-space-size=8192 outils/pistes.mjs planet_pistes.osm.gz tuiles
+
+      - name: Vérifier puis publier
+        id: publier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCER: ${{ inputs.forcer && '1' || '' }}
+        run: node outils/publier.mjs tuiles
+
+      - name: Demander la reconstruction de soulane.app (si un crochet de déploiement est rangé en secret)
+        if: steps.publier.outputs.publie == '1'
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            curl -fsS -X POST "$HOOK" > /dev/null && echo "Reconstruction de soulane.app demandée."
+          else
+            echo "Pas de crochet : soulane.app prendra la nouvelle version à sa prochaine construction (scripts/vercel-ignore.mjs la repère)."
+          fi
+
+      - name: Noter l'état (et garder le planning actif)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GitHub coupe le planning d'un dépôt public sans activité depuis 60 jours : on le réactive à chaque passage,
+          # et l'état commité compte comme activité.
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/pistes.yml/enable" || true
+          if [ -f etat.json ] && [ -n "$(git status --porcelain etat.json)" ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add etat.json
+            git commit -m "Pistes : $(node -p "require('./etat.json').resultat") ($(date -u +%Y-%m-%d))"
+            git push
+          fi
