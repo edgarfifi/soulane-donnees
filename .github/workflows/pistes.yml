@@ -15,7 +15,7 @@ on:
         type: boolean
         default: false
       crochet:
-        description: "Appeler le crochet de soulane.app même sans nouvelle version (essai ; le site ne se reconstruit que si ses pistes sont en retard)"
+        description: "Appeler le crochet de soulane.app même sans nouvelle version (essai : le site se reconstruit, environ 3 minutes)"
         type: boolean
         default: false
 
@@ -64,7 +64,7 @@ jobs:
         run: node outils/publier.mjs tuiles
 
       # Crochet de déploiement Vercel (créé le 20/10/2026 avec l'accord d'Edgar, secret VERCEL_DEPLOY_HOOK) : le site se
-      # reconstruit même si personne n'envoie de code ; scripts/vercel-ignore.mjs ne construit que si les pistes ont changé.
+      # reconstruit même si personne n'envoie de code. Appelé seulement quand une nouvelle version vient d'être publiée.
       - name: Demander la reconstruction de soulane.app (si un crochet de déploiement est rangé en secret)
         if: steps.publier.outputs.publie == '1' || inputs.crochet
         env:
