@@ -1,4 +1,4 @@
-/* global process, console, fetch */
+/* global process, console, fetch, AbortSignal, setTimeout */
 // Vérifie puis publie les tuiles des pistes fabriquées par outils/pistes.mjs (dépôt edgarfifi/soulane-donnees, lancé
 // chaque semaine par .github/workflows/pistes.yml). Tenu dans le dépôt de l'app Soulane (scripts/soulane-donnees/).
 //   node outils/publier.mjs <dossier des tuiles>

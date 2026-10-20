@@ -83,5 +83,5 @@ jobs:
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add etat.json
             git commit -m "Pistes : $(node -p "require('./etat.json').resultat") ($(date -u +%Y-%m-%d))"
-            git push
+            git pull --rebase --quiet && git push
           fi
