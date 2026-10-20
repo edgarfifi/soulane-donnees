@@ -38,6 +38,10 @@ export function compareManifests(prev, next, limits = LIMITS) {
   for (const z of next.zooms) if (!(next.tuiles[z]?.tuiles > 0)) errors.push(`Aucune tuile au zoom ${z}.`)
   if (prev && typeof prev.pistes === 'number') {
     if (gap(next.pistes, prev.pistes) > limits.pistes) errors.push(`${next.pistes} pistes contre ${prev.pistes} la fois précédente (${pct(next.pistes, prev.pistes)}).`)
+    // Remontées mécaniques (dans les tuiles depuis le 20/10/2026) : comparées quand les deux fabrications les comptent.
+    if (typeof prev.remontees === 'number' && typeof next.remontees === 'number' && gap(next.remontees, prev.remontees) > limits.pistes) {
+      errors.push(`${next.remontees} remontées contre ${prev.remontees} la fois précédente (${pct(next.remontees, prev.remontees)}).`)
+    }
     for (const [z, p] of Object.entries(prev.tuiles ?? {})) {
       const n = next.tuiles[z]
       if (!n) {
@@ -82,7 +86,7 @@ function main() {
     writeFileSync(
       'etat.json',
       JSON.stringify(
-        { verifie: new Date().toISOString(), resultat: result, pistes: next.pistes, tuiles: total, source_date: next.source_date ?? null, empreinte: next.empreinte, ...extra },
+        { verifie: new Date().toISOString(), resultat: result, pistes: next.pistes, remontees: next.remontees ?? null, tuiles: total, source_date: next.source_date ?? null, empreinte: next.empreinte, ...extra },
         null,
         1
       ) + '\n'
@@ -113,7 +117,8 @@ function main() {
     }
 
     const d = compareManifests(prev, next)
-    const head = `**${next.pistes} pistes**, ${total} tuiles (fichier d'OpenSnowMap du ${String(next.source_date ?? next.fabrique).slice(0, 10)})`
+    const lifts = typeof next.remontees === 'number' ? `, ${next.remontees} remontées` : ''
+    const head = `**${next.pistes} pistes**${lifts}, ${total} tuiles (fichier d'OpenSnowMap du ${String(next.source_date ?? next.fabrique).slice(0, 10)})`
     if (!d.fresh && d.ok) {
       console.log('Mêmes tuiles que la version publiée : rien à publier.')
       summary([`## Pistes : inchangées`, head])
@@ -141,8 +146,8 @@ function main() {
     const t = spawnSync('tar', ['-czf', archive, '-C', dir, '.'], { stdio: 'inherit' })
     if (t.status !== 0) throw new Error('Archive impossible.')
     const notes = [
-      `Tuiles vectorielles (MVT, couche « pistes ») des pistes de ski de la carte d'hiver de Soulane, zooms ${next.zooms.join(', ')}, fabriquées le ${String(next.fabrique).slice(0, 10)} à partir du fichier d'OpenSnowMap du ${String(next.source_date ?? next.fabrique).slice(0, 10)}.`,
-      `${next.pistes} pistes, ${total} tuiles : Alpes, Pyrénées, Jura, Vosges, Massif central, Corse.`,
+      `Tuiles vectorielles (MVT, couche « pistes ») des pistes de ski (et des remontées mécaniques) des cartes de Soulane, zooms ${next.zooms.join(', ')}, fabriquées le ${String(next.fabrique).slice(0, 10)} à partir du fichier d'OpenSnowMap du ${String(next.source_date ?? next.fabrique).slice(0, 10)}.`,
+      `${next.pistes} pistes${lifts}, ${total} tuiles : Alpes, Pyrénées, Jura, Vosges, Massif central, Corse.`,
       "Source : fichier des pistes d'OpenSnowMap. Données © contributeurs OpenStreetMap, base de données sous licence ODbL (https://www.openstreetmap.org/copyright)."
     ].join('\n\n')
     const c = gh(['release', 'create', tag, archive, join(dir, 'manifeste.json'), '--repo', repo, '--title', `Pistes ${String(next.fabrique).slice(0, 10)}`, '--notes', notes, '--latest'])

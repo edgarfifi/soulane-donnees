@@ -39,7 +39,7 @@ function decodeXml(s) {
     return codePointText(code) ?? m;
   });
 }
-var KEEP = /* @__PURE__ */ new Set(["piste:type", "piste:difficulty", "piste:name", "name", "area", "landuse", "piste:grooming"]);
+var KEEP = /* @__PURE__ */ new Set(["piste:type", "piste:difficulty", "piste:name", "name", "area", "landuse", "piste:grooming", "aerialway"]);
 function keepTag(k) {
   return KEEP.has(k);
 }
@@ -68,6 +68,14 @@ function pisteFeature(tags2, coords, closed) {
   if (name && name.length <= 80) props.name = name;
   if (tags2["piste:grooming"]) props["piste:grooming"] = tags2["piste:grooming"];
   return { type: polygon ? "polygon" : "line", coords, properties: props, minzoom: minzoomOf(types, polygon) };
+}
+var AERIALWAYS = ["cable_car", "gondola", "mixed_lift", "chair_lift", "drag_lift", "t-bar", "j-bar", "platter", "rope_tow", "magic_carpet"];
+function aerialwayFeature(tags2, coords) {
+  const kind2 = tags2.aerialway;
+  if (!kind2 || !AERIALWAYS.includes(kind2) || tags2["piste:type"] || coords.length < 4) return null;
+  const props = { aerialway: kind2 };
+  if (tags2.name && tags2.name.length <= 80) props.name = tags2.name;
+  return { type: "line", coords, properties: props, minzoom: kind2 === "cable_car" || kind2 === "gondola" ? 10 : 11 };
 }
 
 // src/shared/core/borderClip.ts
@@ -591,11 +599,22 @@ for (const rel of relations) {
   }
 }
 var features = [];
+var pistes = 0;
+var lifts = 0;
 for (const w of ways.values()) {
   const f = pisteFeature(w.tags, w.coords, w.closed);
-  if (f) features.push(f);
+  if (f) {
+    features.push(f);
+    pistes++;
+    continue;
+  }
+  const a = aerialwayFeature(w.tags, w.coords);
+  if (a) {
+    features.push(a);
+    lifts++;
+  }
 }
-console.log(`${features.length} pistes \xE0 tuiler`);
+console.log(`${pistes} pistes et ${lifts} remont\xE9es \xE0 tuiler`);
 rmSync(outDir, { recursive: true, force: true });
 var stats = {};
 var total = 0;
@@ -631,7 +650,8 @@ writeFileSync(
       ...sourceDate && !isNaN(sourceDate.getTime()) ? { source_date: sourceDate.toISOString() } : {},
       region: PISTES_REGION,
       zooms: ZOOMS,
-      pistes: features.length,
+      pistes,
+      remontees: lifts,
       tuiles: stats,
       empreinte,
       ...outil ? { outil } : {}
