@@ -1,0 +1,82 @@
+# Refait les tuiles des sentiers de rando balisés de Soulane chaque semaine, à partir des extraits d'OpenStreetMap de
+# Geofabrik (France, Espagne, Andorre, Suisse, Liechtenstein, Italie, Autriche, Bavière, Monaco ; © contributeurs
+# OpenStreetMap, ODbL), et les publie dans la version fixe « sentiers » de ce dépôt : soulane.app reprend la dernière à sa
+# construction suivante (/donnees/sentiers/z/x/y.pbf). Dépôt public : minutes gratuites ; GITHUB_TOKEN suffit. Fichier
+# tenu dans le dépôt de l'app Soulane (scripts/soulane-donnees/), envoyé ici par scripts/pistes-outil.mjs --publier.
+name: Sentiers de rando
+
+on:
+  schedule:
+    # Mercredi 3 h 37 (UTC) : les extraits de Geofabrik sont refaits chaque nuit vers 1 h.
+    - cron: '37 3 * * 3'
+  workflow_dispatch:
+    inputs:
+      forcer:
+        description: "Publier même si les chiffres s'écartent beaucoup de la fois précédente"
+        type: boolean
+        default: false
+      crochet:
+        description: "Appeler le crochet de soulane.app même sans nouvelle version (essai : le site se reconstruit, environ 3 minutes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sentiers
+  cancel-in-progress: false
+
+jobs:
+  sentiers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # Environ 11 Go téléchargés en tout, un extrait à la fois (lu puis effacé : jamais plus d'un gros fichier sur le
+      # disque), environ 30 minutes.
+      - name: Télécharger les extraits et fabriquer les tuiles
+        run: node --max-old-space-size=10240 outils/sentiers.mjs tuiles --geofabrik
+
+      - name: Vérifier puis publier
+        id: publier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCER: ${{ inputs.forcer && '1' || '' }}
+          JEU: sentiers
+        run: node outils/publier.mjs tuiles
+
+      # Crochet de déploiement Vercel (secret VERCEL_DEPLOY_HOOK, le même que les pistes) : le site se reconstruit même si
+      # personne n'envoie de code. Appelé seulement quand une nouvelle version vient d'être publiée.
+      - name: Demander la reconstruction de soulane.app (si un crochet de déploiement est rangé en secret)
+        if: steps.publier.outputs.publie == '1' || inputs.crochet
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            curl -fsS -X POST "$HOOK" > /dev/null && echo "Reconstruction de soulane.app demandée."
+          else
+            echo "Pas de crochet : soulane.app prendra la nouvelle version à sa prochaine construction (scripts/vercel-ignore.mjs la repère)."
+          fi
+
+      - name: Noter l'état (et garder le planning actif)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GitHub coupe le planning d'un dépôt public sans activité depuis 60 jours : on le réactive à chaque passage,
+          # et l'état commité compte comme activité.
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/sentiers.yml/enable" || true
+          if [ -f etat-sentiers.json ] && [ -n "$(git status --porcelain etat-sentiers.json)" ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add etat-sentiers.json
+            git commit -m "Sentiers de rando : $(node -p "require('./etat-sentiers.json').resultat") ($(date -u +%Y-%m-%d))"
+            git pull --rebase --quiet && git push
+          fi

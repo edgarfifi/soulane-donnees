@@ -43,5 +43,27 @@ calque « Itinéraires ski de rando » de l'app [Soulane](https://soulane.app).
   l'exactitude des données et déclinent toute responsabilité à ce sujet. Une erreur dans un itinéraire se signale à la
   Fondation Petzl : randohiver@fondation-petzl.org.
 
-Les fichiers de ce dépôt sont tenus dans le dépôt de l'app Soulane (`scripts/soulane-donnees/`) ; `outils/pistes.mjs` et
-`outils/skirando.mjs` y sont générés à partir du code de l'app : ne pas les modifier ici.
+## Sentiers de rando balisés
+
+Tuiles vectorielles (MVT, couche `sentiers`, zooms 8 à 12, le zoom 12 à 8 192 unités par tuile) des itinéraires de
+randonnée balisés d'OpenStreetMap (relations `route=hiking` et `route=foot` : GR, GRP, PR, SL, sentiers locaux) de la
+France, de l'Espagne, de l'Andorre, de la Suisse, du Liechtenstein, de l'Italie, de l'Autriche, de la Bavière et de Monaco,
+telles que les dessine le calque « Sentiers de rando » de l'app [Soulane](https://soulane.app). Propriété `n` : réseau le
+plus important qui emprunte le chemin (0 international, 1 national, 2 régional, 3 local) ; `l` : les numéros des
+itinéraires (« GR 11 · PR-HU 12 »), ou leur nom.
+
+- **Version publiée** : dans la version fixe [`sentiers`](https://github.com/edgarfifi/soulane-donnees/releases/tag/sentiers) :
+  [`manifeste.json`](https://github.com/edgarfifi/soulane-donnees/releases/download/sentiers/manifeste.json) (dates des
+  extraits, chiffres, empreinte) nomme l'archive à prendre (`archive`, fichiers `z/x/y.pbf`) ; les 3 archives les plus
+  récentes sont gardées.
+- **Mise à jour** : chaque mercredi, automatiquement ([`.github/workflows/sentiers.yml`](.github/workflows/sentiers.yml)) :
+  les extraits de [Geofabrik](https://download.geofabrik.de/) sont téléchargés un à un, lus
+  ([`outils/sentiers.mjs`](outils/sentiers.mjs)), comparés à la version publiée puis publiés s'ils ont changé et si les
+  chiffres restent proches ([`outils/publier.mjs`](outils/publier.mjs)). L'état du dernier passage est dans
+  [`etat-sentiers.json`](etat-sentiers.json).
+- **Licence** : données © [contributeurs OpenStreetMap](https://www.openstreetmap.org/copyright). Ces tuiles sont une base de
+  données dérivée d'OpenStreetMap, mise à disposition sous la licence
+  [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
+
+Les fichiers de ce dépôt sont tenus dans le dépôt de l'app Soulane (`scripts/soulane-donnees/`) ; `outils/pistes.mjs`,
+`outils/skirando.mjs` et `outils/sentiers.mjs` y sont générés à partir du code de l'app : ne pas les modifier ici.
