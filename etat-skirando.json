@@ -1,13 +1,14 @@
 {
- "verifie": "2026-10-28T15:07:38.425Z",
+ "verifie": "2026-10-28T17:53:42.718Z",
  "resultat": "publie",
  "troncons": 12163,
+ "itineraires": 5030,
  "km": 11763,
  "tuiles": 6858,
  "versions": {
   "alpes": "2026-10-28",
   "pyrenees": "2026-10-28"
  },
- "empreinte": "ac58315f826cbab1154357dd5f761897caea935bee6a45f9037ae7fc96df5502",
- "archive": "skirando-20261028-ac58315f826c.tar.gz"
+ "empreinte": "ed6e5ce85b5b4e6b88d28f1567a9f1bb996a02d5a08ba3b59d546c6bf2bfef41",
+ "archive": "skirando-20261028-ed6e5ce85b5b.tar.gz"
 }
