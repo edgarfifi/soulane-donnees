@@ -102,8 +102,22 @@ function wkbLines(bytes) {
 // src/shared/core/skiRoutes.ts
 var SKITOURENGURU_PUBLIC = "https://download.skitourenguru.com/public/";
 var SKI_ROUTE_REGIONS = [
-  { id: "alpes", dir: "France-Alps", file: "France-Alps-Segments-Smoothed-FootSectionsIncluded.sqlite", box: [5.2, 43.7, 7.9, 46.6] },
-  { id: "pyrenees", dir: "France-Pyrenees", file: "France-Pyrenees-Segments-Smoothed-FootSectionsIncluded.sqlite", box: [-1.9, 42.2, 3.2, 43.3] }
+  {
+    id: "alpes",
+    code: "A",
+    dir: "France-Alps",
+    file: "France-Alps-Segments-Smoothed-FootSectionsIncluded.sqlite",
+    compositions: "France_Compositions.geojson",
+    box: [5.2, 43.7, 7.9, 46.6]
+  },
+  {
+    id: "pyrenees",
+    code: "P",
+    dir: "France-Pyrenees",
+    file: "France-Pyrenees-Segments-Smoothed-FootSectionsIncluded.sqlite",
+    compositions: "Pyrenees_Compositions.geojson",
+    box: [-1.9, 42.2, 3.2, 43.3]
+  }
 ];
 var SKI_ROUTES_BOX = [
   Math.min(...SKI_ROUTE_REGIONS.map((r) => r.box[0])),
@@ -157,6 +171,8 @@ function segmentPublishable(value) {
 }
 function skiRouteFeatures(row, project) {
   if (row.foot !== 0 && row.foot !== 1) throw new Error(`Colonne \xAB foot \xBB inattendue : ${String(row.foot)}`);
+  const properties = { foot: row.foot };
+  if (row.routes) properties.r = row.routes;
   const out = [];
   for (const line of wkbLines(row.geometry)) {
     if (line.length < 4) continue;
@@ -167,10 +183,95 @@ function skiRouteFeatures(row, project) {
       coords[i] = lng;
       coords[i + 1] = lat;
     }
-    out.push({ type: "line", coords, properties: { foot: row.foot } });
+    out.push({ type: "line", coords, properties });
   }
   return out;
 }
+var textField = (v, what, id) => {
+  if (v == null) return "";
+  if (typeof v !== "string") throw new Error(`Itin\xE9raire ${String(id)} : \xAB ${what} \xBB inattendu (${JSON.stringify(v)})`);
+  return v;
+};
+function parseCompositions(json) {
+  const fc = json;
+  if (!fc || fc.type !== "FeatureCollection" || !Array.isArray(fc.features)) throw new Error("Fichier des itin\xE9raires illisible");
+  const props = fc.features.map((f) => f?.properties);
+  if (props.some((p) => !p || typeof p !== "object")) throw new Error("Itin\xE9raire sans propri\xE9t\xE9s");
+  const hasPublish = props.some((p) => Object.prototype.hasOwnProperty.call(p, "publish"));
+  const seen = /* @__PURE__ */ new Set();
+  const routes = props.map((p) => {
+    const id = p.id;
+    if (typeof id !== "number" || !Number.isInteger(id) || id <= 0) throw new Error(`Identifiant d'itin\xE9raire inattendu : ${JSON.stringify(id)}`);
+    if (seen.has(id)) throw new Error(`Itin\xE9raire ${id} en double`);
+    seen.add(id);
+    const raw = p.segments;
+    let segments;
+    if (typeof raw === "string" && /^\s*\d+(\s*,\s*\d+)*\s*$/.test(raw)) segments = raw.split(",").map((s) => Number(s.trim()));
+    else if (Array.isArray(raw) && raw.length > 0 && raw.every((s) => typeof s === "number" && Number.isInteger(s) && s > 0)) segments = raw;
+    else throw new Error(`Itin\xE9raire ${id} : liste des tron\xE7ons inattendue (${JSON.stringify(raw)})`);
+    const mdiff = p.mdiff == null ? 0 : p.mdiff;
+    if (typeof mdiff !== "number" || !Number.isInteger(mdiff) || mdiff < 0 || mdiff >= SKI_GRADES.length) {
+      throw new Error(`Itin\xE9raire ${id} : difficult\xE9 inattendue (${JSON.stringify(p.mdiff)})`);
+    }
+    const name = textField(p.routes, "routes", id);
+    return {
+      id,
+      segments,
+      start: textField(p.start, "start", id),
+      stop: textField(p.stop, "stop", id),
+      ...name.trim() ? { name } : {},
+      mdiff,
+      ...hasPublish ? { publish: p.publish } : {}
+    };
+  });
+  return { routes, hasPublish };
+}
+var SKI_ROUTE_INDEX_FILE = "itineraires.json";
+var SKI_ROUTE_INDEX_VERSION = 1;
+function linkSkiRoutes(routes, code, known) {
+  const ids = /* @__PURE__ */ new Map();
+  const entries = {};
+  let missingRefs = 0;
+  for (const r of [...routes].sort((a, b) => a.id - b.id)) {
+    let used = false;
+    for (const s of new Set(r.segments)) {
+      if (!known.has(s)) {
+        missingRefs++;
+        continue;
+      }
+      used = true;
+      const list = ids.get(s);
+      if (list) list.push(r.id);
+      else ids.set(s, [r.id]);
+    }
+    if (used) entries[`${code}${r.id}`] = r.name ? [r.start, r.stop, r.mdiff, r.name] : [r.start, r.stop, r.mdiff];
+  }
+  const bySegment = /* @__PURE__ */ new Map();
+  for (const [s, list] of ids) bySegment.set(s, list.map((id) => `${code}${id}`));
+  return { bySegment, entries, missingRefs };
+}
+var SKI_GRADES = [
+  "",
+  "F",
+  "F+",
+  "PD\u2212",
+  "PD",
+  "PD+",
+  "AD\u2212",
+  "AD",
+  "AD+",
+  "D\u2212",
+  "D",
+  "D+",
+  "TD\u2212",
+  "TD",
+  "TD+",
+  "ED\u2212",
+  "ED",
+  "ED+",
+  "EX"
+];
+var collator = new Intl.Collator("fr", { sensitivity: "base", numeric: true });
 
 // src/shared/core/borderClip.ts
 function signedArea(ring) {
@@ -697,7 +798,9 @@ async function regionZip(region, local) {
 var tmp = mkdtempSync(join(tmpdir(), "skirando-"));
 var features = [];
 var regions = {};
+var index = {};
 var troncons = 0;
+var itineraires = 0;
 var kmSki = 0;
 var kmFoot = 0;
 try {
@@ -706,8 +809,13 @@ try {
     const entries = zipEntries(zip.bytes);
     const entry = entries.find((e) => e.name === region.file);
     if (!entry) throw new Error(`${zip.name} sans ${region.file} (contenu : ${entries.map((e) => e.name).join(", ")})`);
+    const compEntry = entries.find((e) => e.name === region.compositions);
+    if (!compEntry) throw new Error(`${zip.name} sans ${region.compositions} (contenu : ${entries.map((e) => e.name).join(", ")})`);
     const rev = entries.find((e) => e.name === "Revision.txt");
     const version = rev ? parseRevision(new TextDecoder().decode(zipEntryBytes(zip.bytes, rev, inflateRawSync))) : null;
+    const comp = parseCompositions(JSON.parse(new TextDecoder().decode(zipEntryBytes(zip.bytes, compEntry, inflateRawSync))));
+    const routes = comp.hasPublish ? comp.routes.filter((r) => segmentPublishable(r.publish)) : comp.routes;
+    const routesWithheld = comp.routes.length - routes.length;
     const dbFile = join(tmp, region.file);
     writeFileSync(dbFile, zipEntryBytes(zip.bytes, entry, inflateRawSync));
     const db = new DatabaseSync(dbFile, { readOnly: true });
@@ -717,9 +825,22 @@ try {
       const srs = db.prepare("SELECT srtext FROM spatial_ref_sys WHERE srid = ?").get(cols[0].s);
       if (!isLambert93Wkt(srs?.srtext ?? "")) throw new Error(`${region.file} : projection inattendue (${srs?.srtext ?? "inconnue"})`);
       const names = db.prepare(`PRAGMA table_info("${cols[0].t}")`).all().map((c) => c.name.toLowerCase());
+      if (!names.includes("id")) throw new Error(`${region.file} : colonne \xAB id \xBB des tron\xE7ons absente`);
       const hasPublish = names.includes("publish");
-      const rows = db.prepare(`SELECT "${cols[0].g}" AS geometry, foot${hasPublish ? ", publish" : ""} FROM "${cols[0].t}"`).all();
+      const rows = db.prepare(`SELECT "${cols[0].g}" AS geometry, foot, id${hasPublish ? ", publish" : ""} FROM "${cols[0].t}"`).all();
       let withheld = 0;
+      const kept = rows.filter((row) => {
+        if (!row.geometry) return false;
+        if (hasPublish && !segmentPublishable(row.publish)) {
+          withheld++;
+          return false;
+        }
+        return true;
+      });
+      const link = linkSkiRoutes(routes, region.code, new Set(kept.map((row) => row.id)));
+      Object.assign(index, link.entries);
+      const nRoutes = Object.keys(link.entries).length;
+      itineraires += nRoutes;
       let west = Infinity;
       let south = Infinity;
       let east = -Infinity;
@@ -727,17 +848,13 @@ try {
       let n = 0;
       let ski = 0;
       let foot = 0;
-      for (const row of rows) {
-        if (!row.geometry) continue;
-        if (hasPublish && !segmentPublishable(row.publish)) {
-          withheld++;
-          continue;
-        }
+      for (const row of kept) {
         let len = 0;
         for (const l of wkbLines(row.geometry)) for (let k = 2; k < l.length; k += 2) len += Math.hypot(l[k] - l[k - 2], l[k + 1] - l[k - 1]);
         if (row.foot === 1) foot += len;
         else ski += len;
-        for (const f of skiRouteFeatures(row, lambert93ToLngLat)) {
+        const refs = link.bySegment.get(row.id);
+        for (const f of skiRouteFeatures({ geometry: row.geometry, foot: row.foot, ...refs ? { routes: refs.join(",") } : {} }, lambert93ToLngLat)) {
           for (let k = 0; k < f.coords.length; k += 2) {
             west = Math.min(west, f.coords[k]);
             east = Math.max(east, f.coords[k]);
@@ -760,14 +877,19 @@ try {
         fichier: zip.name,
         ...version ? { version: version.date, revision: version.revision } : {},
         troncons: n,
+        itineraires: nRoutes,
         km_ski: Math.round(ski / 1e3),
         km_pied: Math.round(foot / 1e3),
         emprise: [west, south, east, north].map((v) => Math.round(v * 1e4) / 1e4),
         ...outside ? { hors_zone: true } : {},
-        ...hasPublish ? { non_publies: withheld } : {}
+        ...hasPublish ? { non_publies: withheld } : {},
+        ...comp.hasPublish ? { itineraires_non_publies: routesWithheld } : {},
+        ...link.missingRefs ? { references_absentes: link.missingRefs } : {}
       };
-      console.log(`${region.id} : ${n} tron\xE7ons, ${Math.round(ski / 1e3)} km \xE0 ski, ${Math.round(foot / 1e3)} km \xE0 pied`);
+      console.log(`${region.id} : ${n} tron\xE7ons, ${nRoutes} itin\xE9raires, ${Math.round(ski / 1e3)} km \xE0 ski, ${Math.round(foot / 1e3)} km \xE0 pied`);
       if (withheld) console.log(`${region.id} : ${withheld} tron\xE7ons marqu\xE9s \xAB \xE0 ne pas publier \xBB par leurs auteurs, laiss\xE9s de c\xF4t\xE9`);
+      if (routesWithheld) console.log(`${region.id} : ${routesWithheld} itin\xE9raires marqu\xE9s \xAB \xE0 ne pas publier \xBB par leurs auteurs, laiss\xE9s de c\xF4t\xE9`);
+      if (link.missingRefs) console.log(`${region.id} : ${link.missingRefs} r\xE9f\xE9rences \xE0 des tron\xE7ons absents de la base, ignor\xE9es`);
     } finally {
       db.close();
     }
@@ -793,6 +915,13 @@ for (const z of SKI_ROUTE_ZOOMS) {
   total += bytes;
   console.log(`zoom ${z} : ${tiles.size} tuiles, ${(bytes / 1048576).toFixed(1)} Mo`);
 }
+var indexBytes = Buffer.from(
+  JSON.stringify({ version: SKI_ROUTE_INDEX_VERSION, mention: SKI_ROUTES_CREDIT, licence: "CC BY-ND 4.0 (https://creativecommons.org/licenses/by-nd/4.0/deed.fr)", itineraires: index })
+);
+mkdirSync(outDir, { recursive: true });
+writeFileSync(join(outDir, SKI_ROUTE_INDEX_FILE), indexBytes);
+digests.push(`${SKI_ROUTE_INDEX_FILE} ${createHash("sha256").update(indexBytes).digest("hex")}`);
+console.log(`${SKI_ROUTE_INDEX_FILE} : ${itineraires} itin\xE9raires, ${(indexBytes.length / 1024).toFixed(0)} Ko`);
 digests.sort();
 var empreinte = createHash("sha256").update(digests.join("\n")).digest("hex");
 var outil = "";
@@ -812,6 +941,8 @@ writeFileSync(
       regions,
       zooms: SKI_ROUTE_ZOOMS,
       troncons,
+      itineraires,
+      index: { fichier: SKI_ROUTE_INDEX_FILE, octets: indexBytes.length },
       km: Math.round(kmSki + kmFoot),
       km_pied: Math.round(kmFoot),
       tuiles: stats,

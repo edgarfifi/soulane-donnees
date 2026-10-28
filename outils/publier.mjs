@@ -33,7 +33,11 @@ export const KEEP = 8
 export const SKI_LIMITS = {
   minTroncons: 8000,
   minParRegion: { alpes: 5000, pyrenees: 300 },
+  /** Itinéraires de l'index (départ, arrivée, difficulté ; depuis le 28/10/2026) : 4 563 dans les Alpes, 467 dans les
+   *  Pyrénées ce jour-là. */
+  minItinerairesParRegion: { alpes: 3500, pyrenees: 300 },
   troncons: { down: 0.08, up: 0.4 },
+  itineraires: { down: 0.08, up: 0.4 },
   km: { down: 0.08, up: 0.4 },
   tuiles: { down: 0.08, up: 0.4 },
   octets: { down: 0.15, up: 0.6 }
@@ -91,9 +95,21 @@ export function compareSkiManifests(prev, next, limits = SKI_LIMITS) {
     const n = next.regions[r]?.troncons
     if (!(n >= min)) errors.push(`Région ${r} : ${n ?? 0} tronçons (au moins ${min} attendus).`)
   }
+  // Index des itinéraires : exigé dès qu'une version publiée en avait un (une fabrication qui le perdrait laisserait les
+  // apps sans départ ni arrivée au toucher des lignes).
+  const wantsIndex = typeof next.itineraires === 'number' || typeof prev?.itineraires === 'number'
+  if (wantsIndex) {
+    for (const [r, min] of Object.entries(limits.minItinerairesParRegion ?? {})) {
+      const n = next.regions[r]?.itineraires
+      if (!(n >= min)) errors.push(`Région ${r} : ${n ?? 0} itinéraires (au moins ${min} attendus).`)
+    }
+  }
   for (const z of next.zooms) if (!(next.tuiles[z]?.tuiles > 0)) errors.push(`Aucune tuile au zoom ${z}.`)
   if (prev && typeof prev.troncons === 'number') {
     if (outOf(next.troncons, prev.troncons, limits.troncons)) errors.push(`${next.troncons} tronçons contre ${prev.troncons} la fois précédente (${pct(next.troncons, prev.troncons)}).`)
+    if (typeof prev.itineraires === 'number' && typeof next.itineraires === 'number' && outOf(next.itineraires, prev.itineraires, limits.itineraires)) {
+      errors.push(`${next.itineraires} itinéraires contre ${prev.itineraires} la fois précédente (${pct(next.itineraires, prev.itineraires)}).`)
+    }
     if (typeof prev.km === 'number' && outOf(next.km, prev.km, limits.km)) errors.push(`${next.km} km contre ${prev.km} la fois précédente (${pct(next.km, prev.km)}).`)
     for (const [z, p] of Object.entries(prev.tuiles ?? {})) {
       const n = next.tuiles[z]
@@ -233,15 +249,16 @@ export function skiReleaseNotes(m) {
   const regions = Object.entries(m.regions ?? {})
     .map(
       ([id, r]) =>
-        `- ${id === 'alpes' ? 'Alpes' : 'Pyrénées'} : ${r.troncons} tronçons, ${r.km_ski} km à ski et ${r.km_pied} km à pied, version du ${r.version ?? '?'} (${r.fichier})` +
-        (r.non_publies ? ` ; ${r.non_publies} tronçons marqués « à ne pas publier » par leurs auteurs, laissés de côté` : '')
+        `- ${id === 'alpes' ? 'Alpes' : 'Pyrénées'} : ${r.troncons} tronçons${typeof r.itineraires === 'number' ? `, ${r.itineraires} itinéraires` : ''}, ${r.km_ski} km à ski et ${r.km_pied} km à pied, version du ${r.version ?? '?'} (${r.fichier})` +
+        (r.non_publies ? ` ; ${r.non_publies} tronçons marqués « à ne pas publier » par leurs auteurs, laissés de côté` : '') +
+        (r.itineraires_non_publies ? ` ; ${r.itineraires_non_publies} itinéraires marqués « à ne pas publier », laissés de côté` : '')
     )
     .join('\n')
   return [
     `Tuiles vectorielles (MVT, couche « itineraires », zooms ${m.zooms.join(', ')}) des itinéraires de ski de randonnée des Alpes françaises et des Pyrénées, telles que les dessine l'app Soulane (https://soulane.app). Fabriquées le ${String(m.fabrique).slice(0, 10)} ; dernière archive : ${m.archive}.`,
     regions,
-    `${m.mention}. Source : https://download.skitourenguru.com/public/ (réseau lissé, passages à pied compris). Licence : Creative Commons Attribution - Pas de modification 4.0 International (https://creativecommons.org/licenses/by-nd/4.0/deed.fr).`,
-    "Géométrie non modifiée : seulement projetée (Lambert-93 vers degrés) et découpée en tuiles, les modifications techniques que permet la licence (section 2(a)(4)). Propriété « foot » : 1 = passage à pied, 0 = à ski.",
+    `${m.mention}. Source : https://download.skitourenguru.com/public/ (réseau lissé, passages à pied compris, et les itinéraires qui l'empruntent). Licence : Creative Commons Attribution - Pas de modification 4.0 International (https://creativecommons.org/licenses/by-nd/4.0/deed.fr).`,
+    "Géométrie non modifiée : seulement projetée (Lambert-93 vers degrés) et découpée en tuiles, les modifications techniques que permet la licence (section 2(a)(4)). Propriété « foot » : 1 = passage à pied, 0 = à ski. Propriété « r » : les itinéraires qui empruntent le tronçon (« A12 » = itinéraire 12 des Alpes, « P4645 » = 4645 des Pyrénées), dont itineraires.json donne le départ, l'arrivée et la difficulté donnée par un expert (codes 1 à 18 de leur spécification, F à EX), tels que dans leurs fichiers.",
     "Avertissement des auteurs : ils ne garantissent ni l'exhaustivité ni l'exactitude des données et déclinent toute responsabilité à ce sujet. Un itinéraire n'est pas une invitation à y aller : conditions, neige et danger d'avalanche à évaluer sur place."
   ].join('\n\n')
 }
@@ -255,7 +272,7 @@ function publishSkirando(dir) {
   const state = (result, extra = {}) =>
     writeFileSync(
       'etat-skirando.json',
-      JSON.stringify({ verifie: new Date().toISOString(), resultat: result, troncons: next.troncons, km: next.km, tuiles: total, versions, empreinte: next.empreinte, ...extra }, null, 1) + '\n'
+      JSON.stringify({ verifie: new Date().toISOString(), resultat: result, troncons: next.troncons, ...(typeof next.itineraires === 'number' ? { itineraires: next.itineraires } : {}), km: next.km, tuiles: total, versions, empreinte: next.empreinte, ...extra }, null, 1) + '\n'
     )
   try {
     const view = gh(['release', 'view', SKI_RELEASE, '--repo', repo, '--json', 'assets'], true)
@@ -267,7 +284,7 @@ function publishSkirando(dir) {
       console.log(`Version publiée : ${prev.archive} (${prev.troncons} tronçons, fabriquée le ${String(prev.fabrique).slice(0, 10)}).`)
     }
     const d = compareSkiManifests(prev, next)
-    const head = `**${next.troncons} tronçons**, ${next.km} km dont ${next.km_pied} à pied, ${total} tuiles (versions ${Object.entries(versions).map(([k, v]) => `${k} ${v}`).join(', ')})`
+    const head = `**${next.troncons} tronçons**${typeof next.itineraires === 'number' ? `, ${next.itineraires} itinéraires` : ''}, ${next.km} km dont ${next.km_pied} à pied, ${total} tuiles (versions ${Object.entries(versions).map(([k, v]) => `${k} ${v}`).join(', ')})`
     if (!d.fresh && d.ok) {
       console.log('Mêmes tuiles que la version publiée : rien à publier.')
       summary(['## Itinéraires ski de rando : inchangés', head])
