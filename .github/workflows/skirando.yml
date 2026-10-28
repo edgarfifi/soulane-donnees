@@ -1,0 +1,87 @@
+# Refait les tuiles des itinéraires de ski de rando des Alpes françaises et des Pyrénées chaque semaine, à partir des
+# fichiers lissés publiés chaque nuit par la Fondation Petzl en collaboration avec Skitourenguru GmbH (CC BY-ND 4.0,
+# https://download.skitourenguru.com/public/), et les publie dans la version fixe « skirando » de ce dépôt : soulane.app
+# reprend la dernière à sa construction suivante (/donnees/skirando/z/x/y.pbf). Dépôt public : minutes gratuites ;
+# GITHUB_TOKEN suffit. Fichier tenu dans le dépôt de l'app Soulane (scripts/soulane-donnees/), envoyé ici par
+# scripts/pistes-outil.mjs --publier.
+name: Itinéraires ski de rando
+
+on:
+  schedule:
+    # Mardi 4 h 41 (UTC) : leurs fichiers sont refaits chaque nuit vers 23 h 50 (UTC).
+    - cron: '41 4 * * 2'
+  workflow_dispatch:
+    inputs:
+      forcer:
+        description: "Publier même si les chiffres s'écartent beaucoup de la fois précédente"
+        type: boolean
+        default: false
+      jusqua:
+        description: "Refaire la version publiée ce jour-là ou avant (AAAA-MM-JJ), au lieu de la dernière"
+        type: string
+        default: ''
+      crochet:
+        description: "Appeler le crochet de soulane.app même sans nouvelle version (essai : le site se reconstruit, environ 3 minutes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: skirando
+  cancel-in-progress: false
+
+jobs:
+  skirando:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Télécharger leurs fichiers et fabriquer les tuiles
+        env:
+          SKIRANDO_JUSQUA: ${{ inputs.jusqua }}
+        run: node outils/skirando.mjs tuiles
+
+      - name: Vérifier puis publier
+        id: publier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCER: ${{ inputs.forcer && '1' || '' }}
+          JEU: skirando
+        run: node outils/publier.mjs tuiles
+
+      # Crochet de déploiement Vercel (secret VERCEL_DEPLOY_HOOK, le même que les pistes) : le site se reconstruit même si
+      # personne n'envoie de code. Appelé seulement quand une nouvelle version vient d'être publiée.
+      - name: Demander la reconstruction de soulane.app (si un crochet de déploiement est rangé en secret)
+        if: steps.publier.outputs.publie == '1' || inputs.crochet
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            curl -fsS -X POST "$HOOK" > /dev/null && echo "Reconstruction de soulane.app demandée."
+          else
+            echo "Pas de crochet : soulane.app prendra la nouvelle version à sa prochaine construction (scripts/vercel-ignore.mjs la repère)."
+          fi
+
+      - name: Noter l'état (et garder le planning actif)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GitHub coupe le planning d'un dépôt public sans activité depuis 60 jours : on le réactive à chaque passage,
+          # et l'état commité compte comme activité.
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/skirando.yml/enable" || true
+          if [ -f etat-skirando.json ] && [ -n "$(git status --porcelain etat-skirando.json)" ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add etat-skirando.json
+            git commit -m "Itinéraires ski de rando : $(node -p "require('./etat-skirando.json').resultat") ($(date -u +%Y-%m-%d))"
+            git pull --rebase --quiet && git push
+          fi

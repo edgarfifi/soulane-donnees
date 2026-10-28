@@ -1,15 +1,21 @@
 /* global process, console, fetch, AbortSignal, setTimeout */
-// Vérifie puis publie les tuiles des pistes fabriquées par outils/pistes.mjs (dépôt edgarfifi/soulane-donnees, lancé
-// chaque semaine par .github/workflows/pistes.yml). Tenu dans le dépôt de l'app Soulane (scripts/soulane-donnees/).
-//   node outils/publier.mjs <dossier des tuiles>
-// 1. Compare le manifeste neuf à celui de la dernière version publiée :
+// Vérifie puis publie une fabrication du dépôt edgarfifi/soulane-donnees (lancé chaque semaine par ses workflows). Tenu
+// dans le dépôt de l'app Soulane (scripts/soulane-donnees/).
+//   node outils/publier.mjs <dossier des tuiles>                 pistes de ski (outils/pistes.mjs, .github/workflows/pistes.yml)
+//   JEU=skirando node outils/publier.mjs <dossier des tuiles>    itinéraires de ski de rando (outils/skirando.mjs, skirando.yml)
+// 1. Compare le manifeste neuf à celui de la version publiée :
 //    - même empreinte (mêmes tuiles) : rien à publier ;
-//    - chiffres trop éloignés (fichier d'OpenSnowMap tronqué, région manquante…) : ARRÊT sans publier, en erreur
-//      (GitHub prévient par e-mail) ; FORCER=1 publie quand même (relance à la main, case « forcer »).
-// 2. Publie l'archive pistes.tar.gz + manifeste.json en nouvelle version « pistes-AAAAMMJJ » (la dernière = « Latest » :
-//    soulane.app la reprend à sa construction suivante) et garde les 8 plus récentes.
-// 3. Écrit etat.json (dernier passage, résultat) : le workflow le commite, ce qui garde aussi son planning actif.
-// Sorties pour le workflow (GITHUB_OUTPUT) : publie=1|0, version=<étiquette>.
+//    - chiffres trop éloignés (fichier tronqué, région manquante…) : ARRÊT sans publier, en erreur (GitHub prévient par
+//      e-mail) ; FORCER=1 publie quand même (relance à la main, case « forcer »).
+// 2. Publie :
+//    - PISTES : archive pistes.tar.gz + manifeste.json en nouvelle version « pistes-AAAAMMJJ » (la dernière = « Latest » :
+//      soulane.app la reprend à sa construction suivante), les 8 plus récentes gardées ;
+//    - ITINÉRAIRES : dans la version FIXE « skirando » (jamais « Latest » : le lien des pistes ne bouge pas), une archive
+//      à nom unique (skirando-AAAAMMJJ-<empreinte>.tar.gz, jamais remplacée) puis manifeste.json, qui la nomme (seul
+//      fichier remplacé, quelques centaines d'octets) ; les 3 archives les plus récentes gardées.
+// 3. Écrit etat.json (pistes) ou etat-skirando.json (dernier passage, résultat) : le workflow le commite, ce qui garde aussi
+//    son planning actif.
+// Sorties pour le workflow (GITHUB_OUTPUT) : publie=1|0, version=<étiquette ou archive>.
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -21,11 +27,26 @@ export const LIMITS = { minPistes: 100000, pistes: 0.05, tuiles: 0.05, octets: 0
 /** Versions des pistes gardées dans le dépôt (les plus récentes). */
 export const KEEP = 8
 
+/** Itinéraires de ski de rando : un réseau tenu à la main par la Fondation Petzl, qui GRANDIT par massif (Pyrénées :
+ *  +15 % en une version le 06/10/2026, +1,6 % du tout) ; une baisse est plus suspecte (export partiel, région perdue).
+ *  `down` / `up` : écart relatif accepté à la baisse / à la hausse. */
+export const SKI_LIMITS = {
+  minTroncons: 8000,
+  minParRegion: { alpes: 5000, pyrenees: 300 },
+  troncons: { down: 0.08, up: 0.4 },
+  km: { down: 0.08, up: 0.4 },
+  tuiles: { down: 0.08, up: 0.4 },
+  octets: { down: 0.15, up: 0.6 }
+}
+/** Version FIXE des itinéraires et archives gardées dedans. */
+export const SKI_RELEASE = 'skirando'
+export const SKI_KEEP = 3
+
 const pct = (a, b) => `${a >= b ? '+' : '−'}${((Math.abs(a - b) / Math.max(1, b)) * 100).toFixed(1)} %`
 const gap = (a, b) => Math.abs(a - b) / Math.max(1, b)
 
 /**
- * Décision PURE à partir du manifeste précédent (null : première fois) et du neuf.
+ * Décision PURE (pistes) à partir du manifeste précédent (null : première fois) et du neuf.
  * `fresh` : les tuiles diffèrent de la version publiée ; `ok` : rien d'anormal ; `errors` : pourquoi on s'arrête.
  */
 export function compareManifests(prev, next, limits = LIMITS) {
@@ -55,7 +76,39 @@ export function compareManifests(prev, next, limits = LIMITS) {
   return { fresh: true, ok: errors.length === 0, errors }
 }
 
-/** Étiquette d'une version neuve : pistes-AAAAMMJJ (date de fabrication), suffixée si elle existe déjà. */
+/** Écart hors des limites asymétriques `lim` ({ down, up }) ? */
+const outOf = (n, p, lim) => (n < p ? (p - n) / Math.max(1, p) > lim.down : (n - p) / Math.max(1, p) > lim.up)
+
+/** Décision PURE (itinéraires de ski de rando), mêmes réponses que compareManifests. */
+export function compareSkiManifests(prev, next, limits = SKI_LIMITS) {
+  const errors = []
+  if (!next || typeof next.troncons !== 'number' || typeof next.km !== 'number' || !next.tuiles || !Array.isArray(next.zooms) || !next.regions) {
+    return { fresh: false, ok: false, errors: ['Manifeste neuf illisible.'] }
+  }
+  if (prev && prev.empreinte && prev.empreinte === next.empreinte) return { fresh: false, ok: true, errors: [] }
+  if (next.troncons < limits.minTroncons) errors.push(`Seulement ${next.troncons} tronçons (au moins ${limits.minTroncons} attendus).`)
+  for (const [r, min] of Object.entries(limits.minParRegion)) {
+    const n = next.regions[r]?.troncons
+    if (!(n >= min)) errors.push(`Région ${r} : ${n ?? 0} tronçons (au moins ${min} attendus).`)
+  }
+  for (const z of next.zooms) if (!(next.tuiles[z]?.tuiles > 0)) errors.push(`Aucune tuile au zoom ${z}.`)
+  if (prev && typeof prev.troncons === 'number') {
+    if (outOf(next.troncons, prev.troncons, limits.troncons)) errors.push(`${next.troncons} tronçons contre ${prev.troncons} la fois précédente (${pct(next.troncons, prev.troncons)}).`)
+    if (typeof prev.km === 'number' && outOf(next.km, prev.km, limits.km)) errors.push(`${next.km} km contre ${prev.km} la fois précédente (${pct(next.km, prev.km)}).`)
+    for (const [z, p] of Object.entries(prev.tuiles ?? {})) {
+      const n = next.tuiles[z]
+      if (!n) {
+        errors.push(`Zoom ${z} absent (présent la fois précédente).`)
+        continue
+      }
+      if (outOf(n.tuiles, p.tuiles, limits.tuiles)) errors.push(`Zoom ${z} : ${n.tuiles} tuiles contre ${p.tuiles} (${pct(n.tuiles, p.tuiles)}).`)
+      if (outOf(n.octets, p.octets, limits.octets)) errors.push(`Zoom ${z} : ${n.octets} octets contre ${p.octets} (${pct(n.octets, p.octets)}).`)
+    }
+  }
+  return { fresh: true, ok: errors.length === 0, errors }
+}
+
+/** Étiquette d'une version neuve des pistes : pistes-AAAAMMJJ (date de fabrication), suffixée si elle existe déjà. */
 export function releaseTag(fabrique, existing) {
   const base = `pistes-${String(fabrique).slice(0, 10).replace(/-/g, '')}`
   let tag = base
@@ -63,24 +116,32 @@ export function releaseTag(fabrique, existing) {
   return tag
 }
 
-function main() {
-  const dir = resolve(process.argv[2] ?? '')
-  if (!existsSync(join(dir, 'manifeste.json'))) {
-    console.error('Usage : node outils/publier.mjs <dossier des tuiles> (avec son manifeste.json)')
-    process.exit(2)
-  }
+/** Nom (unique, jamais remplacé) de l'archive d'une fabrication des itinéraires. */
+export function skiArchiveName(fabrique, empreinte) {
+  return `skirando-${String(fabrique).slice(0, 10).replace(/-/g, '')}-${String(empreinte).slice(0, 12)}.tar.gz`
+}
+
+/** Archives à retirer de la version des itinéraires (les plus anciennes au-delà de `keep`, jamais `current`). PUR. */
+export function skiArchivesToDrop(names, current, keep = SKI_KEEP) {
+  const archives = names.filter((n) => /^skirando-\d{8}-[0-9a-f]+\.tar\.gz$/.test(n) && n !== current).sort().reverse()
+  return archives.slice(Math.max(0, keep - 1))
+}
+
+function tools() {
   const repo = process.env.GITHUB_REPOSITORY || 'edgarfifi/soulane-donnees'
-  const force = process.env.FORCER === '1'
-  // ESSAI=1 : tout sauf publier et retirer des versions (essai sur un ordinateur).
-  const dry = process.env.ESSAI === '1'
-  const next = JSON.parse(readFileSync(join(dir, 'manifeste.json'), 'utf8'))
-  const tmp = mkdtempSync(join(tmpdir(), 'pistes-'))
   const gh = (args, quiet = false) => {
     const r = spawnSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', quiet ? 'pipe' : 'inherit'] })
     return { ok: r.status === 0, out: r.stdout ?? '' }
   }
   const output = (k, v) => process.env.GITHUB_OUTPUT && appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`)
   const summary = (lines) => process.env.GITHUB_STEP_SUMMARY && appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n')
+  return { repo, gh, output, summary, force: process.env.FORCER === '1', dry: process.env.ESSAI === '1' }
+}
+
+function publishPistes(dir) {
+  const { repo, gh, output, summary, force, dry } = tools()
+  const next = JSON.parse(readFileSync(join(dir, 'manifeste.json'), 'utf8'))
+  const tmp = mkdtempSync(join(tmpdir(), 'pistes-'))
   const total = Object.values(next.tuiles).reduce((s, t) => s + t.tuiles, 0)
   const state = (result, extra = {}) =>
     writeFileSync(
@@ -167,11 +228,98 @@ function main() {
   }
 }
 
-/** Après publication : la « dernière version » renvoie bien ce manifeste (lien utilisé par soulane.app). */
-export async function checkLatest(repo, empreinte, tries = 6) {
+/** Texte de la version des itinéraires (licence CC BY-ND 4.0 : auteurs, licence, avertissement, géométrie non modifiée). */
+export function skiReleaseNotes(m) {
+  const regions = Object.entries(m.regions ?? {})
+    .map(
+      ([id, r]) =>
+        `- ${id === 'alpes' ? 'Alpes' : 'Pyrénées'} : ${r.troncons} tronçons, ${r.km_ski} km à ski et ${r.km_pied} km à pied, version du ${r.version ?? '?'} (${r.fichier})` +
+        (r.non_publies ? ` ; ${r.non_publies} tronçons marqués « à ne pas publier » par leurs auteurs, laissés de côté` : '')
+    )
+    .join('\n')
+  return [
+    `Tuiles vectorielles (MVT, couche « itineraires », zooms ${m.zooms.join(', ')}) des itinéraires de ski de randonnée des Alpes françaises et des Pyrénées, telles que les dessine l'app Soulane (https://soulane.app). Fabriquées le ${String(m.fabrique).slice(0, 10)} ; dernière archive : ${m.archive}.`,
+    regions,
+    `${m.mention}. Source : https://download.skitourenguru.com/public/ (réseau lissé, passages à pied compris). Licence : Creative Commons Attribution - Pas de modification 4.0 International (https://creativecommons.org/licenses/by-nd/4.0/deed.fr).`,
+    "Géométrie non modifiée : seulement projetée (Lambert-93 vers degrés) et découpée en tuiles, les modifications techniques que permet la licence (section 2(a)(4)). Propriété « foot » : 1 = passage à pied, 0 = à ski.",
+    "Avertissement des auteurs : ils ne garantissent ni l'exhaustivité ni l'exactitude des données et déclinent toute responsabilité à ce sujet. Un itinéraire n'est pas une invitation à y aller : conditions, neige et danger d'avalanche à évaluer sur place."
+  ].join('\n\n')
+}
+
+function publishSkirando(dir) {
+  const { repo, gh, output, summary, force, dry } = tools()
+  const next = JSON.parse(readFileSync(join(dir, 'manifeste.json'), 'utf8'))
+  const tmp = mkdtempSync(join(tmpdir(), 'skirando-'))
+  const total = Object.values(next.tuiles ?? {}).reduce((s, t) => s + t.tuiles, 0)
+  const versions = Object.fromEntries(Object.entries(next.regions ?? {}).map(([id, r]) => [id, r.version ?? null]))
+  const state = (result, extra = {}) =>
+    writeFileSync(
+      'etat-skirando.json',
+      JSON.stringify({ verifie: new Date().toISOString(), resultat: result, troncons: next.troncons, km: next.km, tuiles: total, versions, empreinte: next.empreinte, ...extra }, null, 1) + '\n'
+    )
+  try {
+    const view = gh(['release', 'view', SKI_RELEASE, '--repo', repo, '--json', 'assets'], true)
+    const assets = view.ok ? JSON.parse(view.out || '{}').assets?.map((a) => a.name) ?? [] : []
+    let prev = null
+    if (view.ok && assets.includes('manifeste.json')) {
+      if (!gh(['release', 'download', SKI_RELEASE, '--repo', repo, '--pattern', 'manifeste.json', '--dir', tmp], true).ok) throw new Error('Manifeste publié illisible : impossible de comparer.')
+      prev = JSON.parse(readFileSync(join(tmp, 'manifeste.json'), 'utf8'))
+      console.log(`Version publiée : ${prev.archive} (${prev.troncons} tronçons, fabriquée le ${String(prev.fabrique).slice(0, 10)}).`)
+    }
+    const d = compareSkiManifests(prev, next)
+    const head = `**${next.troncons} tronçons**, ${next.km} km dont ${next.km_pied} à pied, ${total} tuiles (versions ${Object.entries(versions).map(([k, v]) => `${k} ${v}`).join(', ')})`
+    if (!d.fresh && d.ok) {
+      console.log('Mêmes tuiles que la version publiée : rien à publier.')
+      summary(['## Itinéraires ski de rando : inchangés', head])
+      state('inchange', { archive: prev?.archive ?? null })
+      output('publie', '0')
+      return
+    }
+    if (!d.ok && !force) {
+      console.error('Fabrication refusée, rien n’est publié :\n- ' + d.errors.join('\n- '))
+      summary(["## Itinéraires ski de rando : refusés, rien n'est publié", head, '', ...d.errors.map((e) => `- ${e}`), '', 'Relancer à la main avec « forcer » si ces écarts sont normaux.'])
+      state('refuse', { erreurs: d.errors, archive: prev?.archive ?? null })
+      output('publie', '0')
+      process.exitCode = 1
+      return
+    }
+    if (d.errors.length) console.log('Écarts acceptés (forcer) :\n- ' + d.errors.join('\n- '))
+    const name = skiArchiveName(next.fabrique, next.empreinte)
+    const pointer = { ...next, archive: name }
+    const drop = skiArchivesToDrop(assets, name)
+    if (dry) {
+      console.log(`ESSAI : ${name} serait publiée dans « ${SKI_RELEASE} » ; archives retirées : ${drop.join(', ') || 'aucune'}.`)
+      return
+    }
+    const archive = join(tmp, name)
+    if (spawnSync('tar', ['-czf', archive, '-C', dir, '.'], { stdio: 'inherit' }).status !== 0) throw new Error('Archive impossible.')
+    const manifest = join(tmp, 'manifeste.json')
+    writeFileSync(manifest, JSON.stringify(pointer, null, 1))
+    if (!view.ok) {
+      // Première fois : la version fixe, JAMAIS « Latest » (le lien « dernière version » des pistes ne bouge pas).
+      const c = gh(['release', 'create', SKI_RELEASE, '--repo', repo, '--title', 'Itinéraires de ski de rando (France)', '--notes', skiReleaseNotes(pointer), '--latest=false'])
+      if (!c.ok) throw new Error('Création de la version impossible.')
+    }
+    // L'archive d'abord (nom neuf), puis le manifeste qui la nomme : un lecteur voit toujours une paire complète.
+    if (!gh(['release', 'upload', SKI_RELEASE, archive, '--repo', repo]).ok) throw new Error('Envoi de l’archive impossible.')
+    if (!gh(['release', 'upload', SKI_RELEASE, manifest, '--repo', repo, '--clobber']).ok) throw new Error('Envoi du manifeste impossible.')
+    gh(['release', 'edit', SKI_RELEASE, '--repo', repo, '--notes', skiReleaseNotes(pointer)])
+    for (const old of drop) if (gh(['release', 'delete-asset', SKI_RELEASE, old, '--repo', repo, '--yes']).ok) console.log(`Ancienne archive retirée : ${old}`)
+    console.log(`✔ ${name} publiée.`)
+    summary([`## Itinéraires ski de rando : ${name} publiée`, head, ...(d.errors.length ? ['', 'Écarts acceptés (forcer) :', ...d.errors.map((e) => `- ${e}`)] : [])])
+    state('publie', { archive: name })
+    output('publie', '1')
+    output('version', name)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
+/** Après publication : le lien de lecture de soulane.app renvoie bien ce manifeste. */
+export async function checkLatest(repo, empreinte, tries = 6, url = `https://github.com/${repo}/releases/latest/download/manifeste.json`) {
   for (let i = 0; i < tries; i++) {
     try {
-      const r = await fetch(`https://github.com/${repo}/releases/latest/download/manifeste.json`, { signal: AbortSignal.timeout(20000) })
+      const r = await fetch(url, { signal: AbortSignal.timeout(20000) })
       if (r.ok && (await r.json()).empreinte === empreinte) return true
     } catch {
       // réessayé
@@ -182,15 +330,25 @@ export async function checkLatest(repo, empreinte, tries = 6) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main()
+  const dir = resolve(process.argv[2] ?? '')
+  const ski = process.env.JEU === 'skirando'
+  if (!existsSync(join(dir, 'manifeste.json'))) {
+    console.error('Usage : [JEU=skirando] node outils/publier.mjs <dossier des tuiles> (avec son manifeste.json)')
+    process.exit(2)
+  }
+  if (ski) publishSkirando(dir)
+  else publishPistes(dir)
   if (!process.exitCode && process.env.GITHUB_OUTPUT && existsSync(process.env.GITHUB_OUTPUT)) {
     const out = readFileSync(process.env.GITHUB_OUTPUT, 'utf8')
     if (/^publie=1$/m.test(out)) {
-      const ok = await checkLatest(process.env.GITHUB_REPOSITORY || 'edgarfifi/soulane-donnees', JSON.parse(readFileSync(join(resolve(process.argv[2]), 'manifeste.json'), 'utf8')).empreinte)
+      const repo = process.env.GITHUB_REPOSITORY || 'edgarfifi/soulane-donnees'
+      const empreinte = JSON.parse(readFileSync(join(dir, 'manifeste.json'), 'utf8')).empreinte
+      const url = ski ? `https://github.com/${repo}/releases/download/${SKI_RELEASE}/manifeste.json` : undefined
+      const ok = await checkLatest(repo, empreinte, 6, url)
       if (!ok) {
-        console.error('La dernière version publiée ne renvoie pas ce manifeste.')
+        console.error('La version publiée ne renvoie pas ce manifeste.')
         process.exitCode = 1
-      } else console.log('✔ Lien « dernière version » vérifié.')
+      } else console.log('✔ Lien de lecture vérifié.')
     }
   }
 }
