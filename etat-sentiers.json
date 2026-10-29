@@ -1,0 +1,20 @@
+{
+ "verifie": "2026-10-29T00:06:02.896Z",
+ "resultat": "publie",
+ "itineraires": 125648,
+ "km": 620847,
+ "tuiles": 35944,
+ "source_dates": {
+  "france": "2026-10-28T01:41:09.000Z",
+  "spain": "2026-10-28T01:53:51.000Z",
+  "andorra": "2026-10-28T01:12:58.000Z",
+  "switzerland": "2026-10-27T23:54:02.000Z",
+  "liechtenstein": "2026-10-28T01:20:46.000Z",
+  "italy": "2026-10-28T01:54:06.000Z",
+  "austria": "2026-10-27T23:54:33.000Z",
+  "bayern": "2026-10-28T03:55:35.000Z",
+  "monaco": "2026-10-28T01:04:55.000Z"
+ },
+ "empreinte": "17b9fa3fab7689b5ceea1b0e8345fc4307ef64841598096c4b96fe1c5e401194",
+ "archive": "sentiers-20261029-17b9fa3fab76.tar.gz"
+}
