@@ -1,0 +1,18 @@
+{
+ "verifie": "2026-11-01T10:56:41.731Z",
+ "resultat": "publie",
+ "topos": 7789,
+ "traces": 920,
+ "km": 11199,
+ "tuiles": 7449,
+ "gpx": {
+  "telecharges": 920,
+  "inchanges": 0,
+  "non_verifies": 0,
+  "sans_fichier": 0,
+  "illisibles": 1,
+  "erreurs": 0
+ },
+ "empreinte": "4e6c8f0e9b96fa108d85cc595acabfb010f98a656f99307192d6732da3b2378a",
+ "archive": "skitour-20261101-4e6c8f0e9b96.tar.gz"
+}
