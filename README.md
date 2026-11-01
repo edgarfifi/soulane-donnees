@@ -65,5 +65,26 @@ itinéraires (« GR 11 · PR-HU 12 »), ou leur nom.
   données dérivée d'OpenStreetMap, mise à disposition sous la licence
   [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
 
+## Topos de ski de randonnée de Skitour
+
+Tuiles vectorielles (MVT, couche `topos`, zooms 8 à 14), index et tracés des topos du topoguide collaboratif de
+[Skitour](https://skitour.fr), tels que les montre le calque « Topos » de l'app [Soulane](https://soulane.app). Propriétés des
+tuiles : `id` numéro du topo (page : `https://skitour.fr/topos/<id>`), `g` difficulté du ski, `o` orientation, `d` dénivelé.
+`index.json` : tous les topos qui ont une position ; `traces/<id>.json` : le tracé de chaque topo qui a un GPX, en entiers au
+1/100 000 de degré, chaque point en écart au précédent.
+
+- **Version publiée** : dans la version fixe [`skitour`](https://github.com/edgarfifi/soulane-donnees/releases/tag/skitour) :
+  [`manifeste.json`](https://github.com/edgarfifi/soulane-donnees/releases/download/skitour/manifeste.json) nomme l'archive à
+  prendre (`archive`) ; les 3 archives les plus récentes sont gardées.
+- **Mise à jour** : chaque jeudi, automatiquement ([`.github/workflows/skitour.yml`](.github/workflows/skitour.yml)) : la liste
+  des topos est lue par leur API (clé dans le secret `SKITOUR_API_KEY`, ≈ 82 appels), leurs GPX publics un par seconde, seulement
+  ceux qui ont changé ([`outils/skitour.mjs`](outils/skitour.mjs)) ; puis comparaison à la version publiée et publication
+  ([`outils/publier.mjs`](outils/publier.mjs)). L'état du dernier passage est dans [`etat-skitour.json`](etat-skitour.json).
+- **Licence** : topoguide © les contributeurs de Skitour,
+  [Creative Commons Attribution - Partage dans les mêmes conditions 4.0 International (CC BY-SA 4.0)](https://creativecommons.org/licenses/by-sa/4.0/deed.fr).
+  Ces fichiers restent sous la même licence. Modifications : seules les positions et le point haut des GPX sont gardés, sans
+  simplification. Jamais les sorties ni les photos de Skitour (autre licence).
+
 Les fichiers de ce dépôt sont tenus dans le dépôt de l'app Soulane (`scripts/soulane-donnees/`) ; `outils/pistes.mjs`,
-`outils/skirando.mjs` et `outils/sentiers.mjs` y sont générés à partir du code de l'app : ne pas les modifier ici.
+`outils/skirando.mjs`, `outils/sentiers.mjs` et `outils/skitour.mjs` y sont générés à partir du code de l'app : ne pas les
+modifier ici.

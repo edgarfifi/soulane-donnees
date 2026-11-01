@@ -4,6 +4,7 @@
 //   node outils/publier.mjs <dossier des tuiles>                 pistes de ski (outils/pistes.mjs, .github/workflows/pistes.yml)
 //   JEU=skirando node outils/publier.mjs <dossier des tuiles>    itinéraires de ski de rando (outils/skirando.mjs, skirando.yml)
 //   JEU=sentiers node outils/publier.mjs <dossier des tuiles>    sentiers de rando balisés (outils/sentiers.mjs, sentiers.yml)
+//   JEU=skitour node outils/publier.mjs <dossier des tuiles>     topos Skitour (outils/skitour.mjs, skitour.yml)
 // 1. Compare le manifeste neuf à celui de la version publiée :
 //    - même empreinte (mêmes tuiles) : rien à publier ;
 //    - chiffres trop éloignés (fichier tronqué, région manquante…) : ARRÊT sans publier, en erreur (GitHub prévient par
@@ -14,8 +15,9 @@
 //    - ITINÉRAIRES : dans la version FIXE « skirando » (jamais « Latest » : le lien des pistes ne bouge pas), une archive
 //      à nom unique (skirando-AAAAMMJJ-<empreinte>.tar.gz, jamais remplacée) puis manifeste.json, qui la nomme (seul
 //      fichier remplacé, quelques centaines d'octets) ; les 3 archives les plus récentes gardées ;
-//    - SENTIERS : de même, dans la version FIXE « sentiers » (archive sentiers-AAAAMMJJ-<empreinte>.tar.gz).
-// 3. Écrit etat.json (pistes), etat-skirando.json ou etat-sentiers.json (dernier passage, résultat) : le workflow le
+//    - SENTIERS : de même, dans la version FIXE « sentiers » (archive sentiers-AAAAMMJJ-<empreinte>.tar.gz) ;
+//    - SKITOUR : de même, dans la version FIXE « skitour » (archive skitour-AAAAMMJJ-<empreinte>.tar.gz).
+// 3. Écrit etat.json (pistes), etat-skirando.json, etat-sentiers.json ou etat-skitour.json (dernier passage, résultat) : le workflow le
 //    commite, ce qui garde aussi son planning actif.
 // Sorties pour le workflow (GITHUB_OUTPUT) : publie=1|0, version=<étiquette ou archive>.
 import { spawnSync } from 'node:child_process'
@@ -329,8 +331,72 @@ export function skiReleaseNotes(m) {
   ].join('\n\n')
 }
 
+/** Topos Skitour (liste de leur API et GPX publics, lus chaque semaine) : un topoguide qui grandit lentement (8 080 topos, 921
+ *  avec un GPX, 01/11/2026). Une forte baisse = liste tronquée ou GPX qui ne se lisent plus. `down` / `up` : écart relatif
+ *  accepté à la baisse / à la hausse. */
+export const SKITOUR_LIMITS = {
+  minTopos: 6000,
+  minTraces: 600,
+  topos: { down: 0.05, up: 0.2 },
+  traces: { down: 0.1, up: 0.3 },
+  km: { down: 0.1, up: 0.3 },
+  tuiles: { down: 0.1, up: 0.3 },
+  octets: { down: 0.15, up: 0.4 }
+}
+/** Version FIXE des topos et archives gardées dedans. */
+export const SKITOUR_RELEASE = 'skitour'
+export const SKITOUR_KEEP = 3
+
+/** Décision PURE (topos Skitour), mêmes réponses que compareManifests. */
+export function compareSkitourManifests(prev, next, limits = SKITOUR_LIMITS) {
+  const errors = []
+  if (!next || typeof next.topos !== 'number' || typeof next.traces !== 'number' || typeof next.km !== 'number' || !next.tuiles || !Array.isArray(next.zooms)) {
+    return { fresh: false, ok: false, errors: ['Manifeste neuf illisible.'] }
+  }
+  if (prev && prev.empreinte && prev.empreinte === next.empreinte) return { fresh: false, ok: true, errors: [] }
+  if (next.topos < limits.minTopos) errors.push(`Seulement ${next.topos} topos (au moins ${limits.minTopos} attendus).`)
+  if (next.traces < limits.minTraces) errors.push(`Seulement ${next.traces} tracés (au moins ${limits.minTraces} attendus).`)
+  for (const z of next.zooms) if (!(next.tuiles[z]?.tuiles > 0)) errors.push(`Aucune tuile au zoom ${z}.`)
+  if (prev && typeof prev.topos === 'number') {
+    if (outOf(next.topos, prev.topos, limits.topos)) errors.push(`${next.topos} topos contre ${prev.topos} la fois précédente (${pct(next.topos, prev.topos)}).`)
+    if (typeof prev.traces === 'number' && outOf(next.traces, prev.traces, limits.traces)) errors.push(`${next.traces} tracés contre ${prev.traces} la fois précédente (${pct(next.traces, prev.traces)}).`)
+    if (typeof prev.km === 'number' && outOf(next.km, prev.km, limits.km)) errors.push(`${next.km} km contre ${prev.km} la fois précédente (${pct(next.km, prev.km)}).`)
+    for (const [z, p] of Object.entries(prev.tuiles ?? {})) {
+      const n = next.tuiles[z]
+      if (!n) {
+        errors.push(`Zoom ${z} absent (présent la fois précédente).`)
+        continue
+      }
+      if (outOf(n.tuiles, p.tuiles, limits.tuiles)) errors.push(`Zoom ${z} : ${n.tuiles} tuiles contre ${p.tuiles} (${pct(n.tuiles, p.tuiles)}).`)
+      if (outOf(n.octets, p.octets, limits.octets)) errors.push(`Zoom ${z} : ${n.octets} octets contre ${p.octets} (${pct(n.octets, p.octets)}).`)
+    }
+  }
+  return { fresh: true, ok: errors.length === 0, errors }
+}
+
+/** Nom (unique, jamais remplacé) de l'archive d'une fabrication des topos. */
+export function skitourArchiveName(fabrique, empreinte) {
+  return `skitour-${String(fabrique).slice(0, 10).replace(/-/g, '')}-${String(empreinte).slice(0, 12)}.tar.gz`
+}
+
+/** Archives à retirer de la version des topos. PUR, comme skiArchivesToDrop. */
+export function skitourArchivesToDrop(names, current, keep = SKITOUR_KEEP) {
+  const archives = names.filter((n) => /^skitour-\d{8}-[0-9a-f]+\.tar\.gz$/.test(n) && n !== current).sort().reverse()
+  return archives.slice(Math.max(0, keep - 1))
+}
+
+/** Texte de la version des topos (CC BY-SA 4.0 : source, licence, même licence pour ce qui en est tiré). */
+export function skitourReleaseNotes(m) {
+  return [
+    `Tuiles vectorielles (MVT, couche « topos », zooms ${m.zooms.join(', ')}), index et tracés des topos de ski de randonnée de Skitour, tels que les montre le calque « Topos » de l'app Soulane (https://soulane.app). Fabriqués le ${String(m.fabrique).slice(0, 10)} ; dernière archive : ${m.archive}.`,
+    `${m.topos} topos (index.json), ${m.traces} tracés (traces/<id>.json, entiers au 1/100 000 de degré, en écart au point précédent), ${m.km} km.`,
+    "Source : le topoguide collaboratif de Skitour (https://skitour.fr), liste de son API et GPX publics. Licence : Creative Commons Attribution - Partage dans les mêmes conditions 4.0 International (CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/deed.fr). Modifications : seules les positions et le point haut des GPX sont gardés (ni heures, ni autres relevés), découpés en tuiles sans simplification. Chaque topo : https://skitour.fr/topos/<id>, avec son auteur. Ni sorties ni photos (autre licence).",
+    "Propriétés des tuiles : « id » numéro du topo, « g » difficulté du ski, « o » orientation, « d » dénivelé. Un itinéraire n'est pas une invitation à y aller : conditions, neige et danger d'avalanche à évaluer sur place."
+  ].join('\n\n')
+}
+
 /** Jeux publiés dans une version FIXE (manifeste qui nomme une archive au nom unique) : itinéraires de ski de rando,
- *  sentiers. Chaque jeu dit sa version, ses fichiers, sa décision, ses textes. */
+ *  sentiers, topos Skitour. Chaque jeu dit sa version, ses fichiers, sa décision, ses textes. */
 const skiVersions = (next) => Object.fromEntries(Object.entries(next.regions ?? {}).map(([id, r]) => [id, r.version ?? null]))
 export const FIXED_SETS = {
   skirando: {
@@ -367,6 +433,20 @@ export const FIXED_SETS = {
     describePrev: (prev) => `${prev.itineraires} itinéraires`,
     state: (next, total) => ({ itineraires: next.itineraires, km: next.km, tuiles: total, source_dates: next.source_dates ?? null }),
     head: (next, total) => `**${next.itineraires} itinéraires**, ${next.km} km de chemins, ${total} tuiles (extraits : ${(next.extraits ?? []).join(', ')})`
+  },
+  skitour: {
+    release: SKITOUR_RELEASE,
+    title: 'Topos Skitour',
+    label: 'Topos Skitour',
+    stateFile: 'etat-skitour.json',
+    tmpPrefix: 'skitour-',
+    compare: (prev, next) => compareSkitourManifests(prev, next),
+    archiveName: skitourArchiveName,
+    toDrop: (assets, name) => skitourArchivesToDrop(assets, name),
+    notes: skitourReleaseNotes,
+    describePrev: (prev) => `${prev.topos} topos`,
+    state: (next, total) => ({ topos: next.topos, traces: next.traces, km: next.km, tuiles: total, gpx: next.gpx ?? null }),
+    head: (next, total) => `**${next.topos} topos**, ${next.traces} tracés, ${next.km} km, ${total} tuiles (GPX : ${next.gpx?.telecharges ?? '?'} lus, ${next.gpx?.inchanges ?? '?'} inchangés)`
   }
 }
 
@@ -454,7 +534,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const dir = resolve(process.argv[2] ?? '')
   const set = FIXED_SETS[process.env.JEU ?? '']
   if (!existsSync(join(dir, 'manifeste.json')) || (process.env.JEU && !set)) {
-    console.error('Usage : [JEU=skirando|sentiers] node outils/publier.mjs <dossier des tuiles> (avec son manifeste.json)')
+    console.error('Usage : [JEU=skirando|sentiers|skitour] node outils/publier.mjs <dossier des tuiles> (avec son manifeste.json)')
     process.exit(2)
   }
   if (set) publishFixed(dir, set)

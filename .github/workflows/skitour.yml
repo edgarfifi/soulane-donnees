@@ -1,0 +1,98 @@
+# Refait les données des topos Skitour chaque semaine : la liste des topos par leur API (≈ 82 appels sur les 1 000 de la
+# journée ; clé dans le secret SKITOUR_API_KEY) et leurs GPX publics, un par seconde, seulement ceux qui ont changé (la version
+# publiée, reprise au début, garde leurs empreintes et leurs tracés). Publie dans la version fixe « skitour » de ce dépôt :
+# soulane.app reprend la dernière à sa construction suivante (/donnees/skitour/). Dépôt public : minutes gratuites.
+# Fichier tenu dans le dépôt de l'app Soulane (scripts/soulane-donnees/), envoyé ici par scripts/pistes-outil.mjs --publier.
+name: Topos Skitour
+
+on:
+  schedule:
+    # Jeudi 3 h 53 (UTC) : les pistes passent le lundi, le ski de rando le mardi, les sentiers le mercredi.
+    - cron: '53 3 * * 4'
+  workflow_dispatch:
+    inputs:
+      forcer:
+        description: "Publier même si les chiffres s'écartent beaucoup de la fois précédente"
+        type: boolean
+        default: false
+      crochet:
+        description: "Appeler le crochet de soulane.app même sans nouvelle version (essai : le site se reconstruit, environ 3 minutes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: skitour
+  cancel-in-progress: false
+
+jobs:
+  skitour:
+    runs-on: ubuntu-latest
+    # Première fois : ≈ 921 GPX (≈ 440 Mo, relevés de montre compris), un par seconde : environ 1 h mesurée le 01/11/2026 ; ensuite
+    # autant de questions « a-t-il changé ? » (un quart d'heure) et les seuls fichiers qui ont changé.
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Reprendre la version publiée (tracés et empreintes des GPX)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p precedent
+          if gh release download skitour --repo "$GITHUB_REPOSITORY" --pattern manifeste.json --dir precedent-m 2>/dev/null; then
+            archive=$(node -p "require('./precedent-m/manifeste.json').archive")
+            gh release download skitour --repo "$GITHUB_REPOSITORY" --pattern "$archive" --dir precedent-m
+            tar -xzf "precedent-m/$archive" -C precedent
+            echo "Version précédente : $archive"
+          else
+            echo "Aucune version publiée : tous les GPX seront lus."
+          fi
+
+      - name: Lire la liste et les GPX, fabriquer les tuiles
+        env:
+          SKITOUR_API_KEY: ${{ secrets.SKITOUR_API_KEY }}
+        run: node outils/skitour.mjs tuiles --precedent precedent
+
+      - name: Vérifier puis publier
+        id: publier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCER: ${{ inputs.forcer && '1' || '' }}
+          JEU: skitour
+        run: node outils/publier.mjs tuiles
+
+      # Crochet de déploiement Vercel (secret VERCEL_DEPLOY_HOOK, le même que les pistes) : le site se reconstruit même si
+      # personne n'envoie de code. Appelé seulement quand une nouvelle version vient d'être publiée.
+      - name: Demander la reconstruction de soulane.app (si un crochet de déploiement est rangé en secret)
+        if: steps.publier.outputs.publie == '1' || inputs.crochet
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            curl -fsS -X POST "$HOOK" > /dev/null && echo "Reconstruction de soulane.app demandée."
+          else
+            echo "Pas de crochet : soulane.app prendra la nouvelle version à sa prochaine construction (scripts/vercel-ignore.mjs la repère)."
+          fi
+
+      - name: Noter l'état (et garder le planning actif)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GitHub coupe le planning d'un dépôt public sans activité depuis 60 jours : on le réactive à chaque passage,
+          # et l'état commité compte comme activité.
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/skitour.yml/enable" || true
+          if [ -f etat-skitour.json ] && [ -n "$(git status --porcelain etat-skitour.json)" ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add etat-skitour.json
+            git commit -m "Topos Skitour : $(node -p "require('./etat-skitour.json').resultat") ($(date -u +%Y-%m-%d))"
+            git pull --rebase --quiet && git push
+          fi
