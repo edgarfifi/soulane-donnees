@@ -1,13 +1,13 @@
 {
- "verifie": "2026-11-01T10:56:41.731Z",
- "resultat": "publie",
+ "verifie": "2026-11-05T11:55:57.276Z",
+ "resultat": "inchange",
  "topos": 7789,
  "traces": 920,
  "km": 11199,
  "tuiles": 7449,
  "gpx": {
-  "telecharges": 920,
-  "inchanges": 0,
+  "telecharges": 0,
+  "inchanges": 920,
   "non_verifies": 0,
   "sans_fichier": 0,
   "illisibles": 1,
