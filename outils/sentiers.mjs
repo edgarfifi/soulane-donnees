@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, createWriteStream, fstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { inflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
@@ -906,19 +906,36 @@ var GEOFABRIK = args[0] === "--geofabrik";
 var inputs = GEOFABRIK ? TRAIL_EXTRACTS.map((e) => `https://download.geofabrik.de/${e}-latest.osm.pbf`) : args;
 var sourceDates = {};
 var extractName = (f) => basename(f).replace(/-latest\.osm\.pbf$|\.osm\.pbf$|\.pbf$/, "");
+var STALL_MS = 12e4;
 async function download(url, file) {
   for (let i = 1; ; i++) {
+    const ctl = new AbortController();
+    let dog;
+    const feed = () => {
+      clearTimeout(dog);
+      dog = setTimeout(() => ctl.abort(new Error(`aucune donn\xE9e re\xE7ue pendant ${STALL_MS / 1e3} s`)), STALL_MS);
+    };
     try {
-      const r = await fetch(url, { headers: { "User-Agent": "Soulane-donnees (+https://github.com/edgarfifi/soulane-donnees)" } });
+      feed();
+      const r = await fetch(url, { headers: { "User-Agent": "Soulane-donnees (+https://github.com/edgarfifi/soulane-donnees)" }, signal: ctl.signal });
       if (!r.ok || !r.body) throw new Error(`${r.status}`);
-      await pipeline(Readable.fromWeb(r.body), createWriteStream(file));
+      const watch = new Transform({
+        transform(chunk, _enc, cb) {
+          feed();
+          cb(null, chunk);
+        }
+      });
+      await pipeline(Readable.fromWeb(r.body), watch, createWriteStream(file));
       const lm = r.headers.get("last-modified");
       const d = lm ? new Date(lm) : null;
       return d && !isNaN(d.getTime()) ? d.toISOString() : null;
     } catch (e) {
-      if (i >= 4) throw new Error(`${url} : t\xE9l\xE9chargement impossible (${String(e)})`, { cause: e });
-      console.log(`${url} : essai ${i} rat\xE9 (${String(e)}), nouvel essai dans une minute`);
+      const why = ctl.signal.aborted ? String(ctl.signal.reason) : String(e);
+      if (i >= 4) throw new Error(`${url} : t\xE9l\xE9chargement impossible (${why})`, { cause: e });
+      console.log(`${url} : essai ${i} rat\xE9 (${why}), nouvel essai dans une minute`);
       await new Promise((res) => setTimeout(res, 6e4));
+    } finally {
+      clearTimeout(dog);
     }
   }
 }
