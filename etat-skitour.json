@@ -1,18 +1,18 @@
 {
- "verifie": "2026-11-05T11:55:57.276Z",
- "resultat": "inchange",
+ "verifie": "2026-11-12T12:12:12.063Z",
+ "resultat": "publie",
  "topos": 7789,
- "traces": 920,
- "km": 11199,
- "tuiles": 7449,
+ "traces": 921,
+ "km": 11213,
+ "tuiles": 7452,
  "gpx": {
-  "telecharges": 0,
+  "telecharges": 1,
   "inchanges": 920,
   "non_verifies": 0,
   "sans_fichier": 0,
   "illisibles": 1,
   "erreurs": 0
  },
- "empreinte": "4e6c8f0e9b96fa108d85cc595acabfb010f98a656f99307192d6732da3b2378a",
- "archive": "skitour-20261101-4e6c8f0e9b96.tar.gz"
+ "empreinte": "c4ec9a31164a8b8ada5afe0ca5d47e597f5f43f5d9bd9c420b93dca99602e808",
+ "archive": "skitour-20261112-c4ec9a31164a.tar.gz"
 }
