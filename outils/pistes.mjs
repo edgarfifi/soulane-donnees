@@ -16,6 +16,36 @@ function codePointText(code) {
   if (!Number.isInteger(code) || code <= 0 || code > 1114111 || code >= 55296 && code <= 57343) return null;
   return String.fromCodePoint(code);
 }
+var ENTITIES = {
+  nbsp: String.fromCharCode(160),
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  laquo: String.fromCharCode(171),
+  raquo: String.fromCharCode(187),
+  hellip: String.fromCharCode(8230),
+  ndash: String.fromCharCode(8211),
+  mdash: String.fromCharCode(8212),
+  lsquo: String.fromCharCode(8216),
+  rsquo: String.fromCharCode(8217),
+  ldquo: String.fromCharCode(8220),
+  rdquo: String.fromCharCode(8221),
+  deg: String.fromCharCode(176),
+  times: String.fromCharCode(215),
+  eacute: String.fromCharCode(233),
+  egrave: String.fromCharCode(232),
+  ecirc: String.fromCharCode(234),
+  agrave: String.fromCharCode(224),
+  acirc: String.fromCharCode(226),
+  ccedil: String.fromCharCode(231),
+  ocirc: String.fromCharCode(244),
+  ucirc: String.fromCharCode(251),
+  icirc: String.fromCharCode(238),
+  euml: String.fromCharCode(235),
+  iuml: String.fromCharCode(239)
+};
 
 // src/shared/core/pisteData.ts
 var PISTES_REGION = { west: -2.5, south: 41, east: 17.5, north: 49.5 };

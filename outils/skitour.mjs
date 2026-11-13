@@ -9,19 +9,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// src/shared/core/camptocamp.ts
-var SKITOUR_SITE = "https://skitour.fr";
-var SKITOUR_LICENCE = { name: "CC BY-SA 4.0", url: "https://creativecommons.org/licenses/by-sa/4.0/deed.fr" };
-var TOPO_FAMILIES = [
-  { id: "rando", label: "Randonn\xE9e", acts: ["hiking"] },
-  { id: "ski", label: "Ski de randonn\xE9e", acts: ["skitouring"] },
-  { id: "alpi", label: "Alpinisme", acts: ["snow_ice_mixed", "mountain_climbing"] }
-];
-var C2C_ACTS = TOPO_FAMILIES.flatMap((f) => f.acts);
-var ORIENTATIONS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-var NBSP = String.fromCharCode(160);
+// src/shared/core/xmlText.ts
 var ENTITIES = {
-  nbsp: NBSP,
+  nbsp: String.fromCharCode(160),
   amp: "&",
   lt: "<",
   gt: ">",
@@ -50,7 +40,7 @@ var ENTITIES = {
   euml: String.fromCharCode(235),
   iuml: String.fromCharCode(239)
 };
-function decodeEntities(s) {
+function decodeHtmlEntities(s) {
   return s.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (m, e) => {
     if (e[0] === "#") {
       const code = e[1] === "x" || e[1] === "X" ? Number.parseInt(e.slice(2), 16) : Number.parseInt(e.slice(1), 10);
@@ -59,6 +49,18 @@ function decodeEntities(s) {
     return ENTITIES[e.toLowerCase()] ?? m;
   });
 }
+
+// src/shared/core/camptocamp.ts
+var SKITOUR_SITE = "https://skitour.fr";
+var SKITOUR_LICENCE = { name: "CC BY-SA 4.0", url: "https://creativecommons.org/licenses/by-sa/4.0/deed.fr" };
+var TOPO_FAMILIES = [
+  { id: "rando", label: "Randonn\xE9e", acts: ["hiking"] },
+  { id: "ski", label: "Ski de randonn\xE9e", acts: ["skitouring"] },
+  { id: "alpi", label: "Alpinisme", acts: ["snow_ice_mixed", "mountain_climbing"] }
+];
+var C2C_ACTS = TOPO_FAMILIES.flatMap((f) => f.acts);
+var ORIENTATIONS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+var decodeEntities = decodeHtmlEntities;
 
 // src/shared/core/skitour.ts
 var SKITOUR_LAYER = "topos";
