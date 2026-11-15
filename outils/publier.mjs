@@ -5,6 +5,7 @@
 //   JEU=skirando node outils/publier.mjs <dossier des tuiles>    itinéraires de ski de rando (outils/skirando.mjs, skirando.yml)
 //   JEU=sentiers node outils/publier.mjs <dossier des tuiles>    sentiers de rando balisés (outils/sentiers.mjs, sentiers.yml)
 //   JEU=skitour node outils/publier.mjs <dossier des tuiles>     topos Skitour (outils/skitour.mjs, skitour.yml)
+//   JEU=transports node outils/publier.mjs <dossier des tuiles>  train, car et skibus (outils/transports.mjs, transports.yml)
 // 1. Compare le manifeste neuf à celui de la version publiée :
 //    - même empreinte (mêmes tuiles) : rien à publier ;
 //    - chiffres trop éloignés (fichier tronqué, région manquante…) : ARRÊT sans publier, en erreur (GitHub prévient par
@@ -395,6 +396,78 @@ export function skitourReleaseNotes(m) {
   ].join('\n\n')
 }
 
+/** Train, car et skibus (horaires théoriques GTFS des réseaux de montagne, outils/transports.mjs) : chaque réseau est
+ *  compté à part dans le manifeste. Un réseau qui avait au moins `minStops` arrêts et qui disparaît (absent de la liste,
+ *  fichier introuvable, licence changée) ou perd plus de `stopsDrop` de ses arrêts arrête la publication : on garde la
+ *  version d'avant, Edgar regarde. Un fichier lu mais vide (navettes hors saison) ne compte pas. Les totaux sont bornés aussi. */
+export const TRANSIT_LIMITS = {
+  minArrets: 3000,
+  minStops: 5,
+  stopsDrop: 0.5,
+  arrets: { down: 0.15, up: 0.6 },
+  lignes: { down: 0.15, up: 0.6 },
+  tuiles: { down: 0.2, up: 0.6 },
+  octets: { down: 0.25, up: 0.8 }
+}
+/** Version FIXE des transports et archives gardées dedans. */
+export const TRANSIT_RELEASE = 'transports'
+export const TRANSIT_KEEP = 3
+
+/** Décision PURE (transports), mêmes réponses que compareManifests. */
+export function compareTransitManifests(prev, next, limits = TRANSIT_LIMITS) {
+  const errors = []
+  if (!next || typeof next.arrets !== 'number' || typeof next.lignes !== 'number' || !next.tuiles || !next.reseaux || !Array.isArray(next.zooms)) {
+    return { fresh: false, ok: false, errors: ['Manifeste neuf illisible.'] }
+  }
+  if (prev && prev.empreinte && prev.empreinte === next.empreinte) return { fresh: false, ok: true, errors: [] }
+  if (next.arrets < limits.minArrets) errors.push(`Seulement ${next.arrets} arrêts (au moins ${limits.minArrets} attendus).`)
+  for (const z of next.zooms) if (!(next.tuiles[z]?.tuiles > 0)) errors.push(`Aucune tuile au zoom ${z}.`)
+  if (prev && typeof prev.arrets === 'number') {
+    if (outOf(next.arrets, prev.arrets, limits.arrets)) errors.push(`${next.arrets} arrêts contre ${prev.arrets} la fois précédente (${pct(next.arrets, prev.arrets)}).`)
+    if (typeof prev.lignes === 'number' && outOf(next.lignes, prev.lignes, limits.lignes)) errors.push(`${next.lignes} lignes contre ${prev.lignes} la fois précédente (${pct(next.lignes, prev.lignes)}).`)
+    for (const [id, p] of Object.entries(prev.reseaux ?? {})) {
+      if (!p || !(p.arrets >= limits.minStops)) continue
+      const n = next.reseaux[id]
+      // Un réseau ABSENT de la liste ou ILLISIBLE (téléchargement, licence) arrête ; un fichier lu mais VIDE ne compte
+      // pas : les navettes des stations publient un fichier vide hors saison.
+      if (!n || n.erreur) errors.push(`Réseau « ${id} » disparu (${p.arrets} arrêts la fois précédente)${n?.erreur ? ` : ${n.erreur}` : ''}.`)
+      else if (n.arrets > 0 && n.arrets < p.arrets * (1 - limits.stopsDrop)) errors.push(`Réseau « ${id} » : ${n.arrets} arrêts contre ${p.arrets} (${pct(n.arrets, p.arrets)}).`)
+    }
+    for (const [z, p] of Object.entries(prev.tuiles ?? {})) {
+      const n = next.tuiles[z]
+      if (!n) {
+        errors.push(`Zoom ${z} absent (présent la fois précédente).`)
+        continue
+      }
+      if (outOf(n.tuiles, p.tuiles, limits.tuiles)) errors.push(`Zoom ${z} : ${n.tuiles} tuiles contre ${p.tuiles} (${pct(n.tuiles, p.tuiles)}).`)
+      if (outOf(n.octets, p.octets, limits.octets)) errors.push(`Zoom ${z} : ${n.octets} octets contre ${p.octets} (${pct(n.octets, p.octets)}).`)
+    }
+  }
+  return { fresh: true, ok: errors.length === 0, errors }
+}
+
+/** Nom (unique, jamais remplacé) de l'archive d'une fabrication des transports. */
+export function transitArchiveName(fabrique, empreinte) {
+  return `transports-${String(fabrique).slice(0, 10).replace(/-/g, '')}-${String(empreinte).slice(0, 12)}.tar.gz`
+}
+
+/** Archives à retirer de la version des transports. PUR, comme skiArchivesToDrop. */
+export function transitArchivesToDrop(names, current, keep = TRANSIT_KEEP) {
+  const archives = names.filter((n) => /^transports-\d{8}-[0-9a-f]+\.tar\.gz$/.test(n) && n !== current).sort().reverse()
+  return archives.slice(Math.max(0, keep - 1))
+}
+
+/** Texte de la version des transports (sources, licences, base dérivée). */
+export function transitReleaseNotes(m) {
+  const nets = Object.entries(m.reseaux ?? {}).filter(([, r]) => r.arrets > 0).length
+  return [
+    `Tuiles vectorielles (MVT, couches « lignes » et « arrets », zooms ${m.zooms.join(', ')}) et index (index.json : réseaux, lignes avec leur période de validité, arrêts) des trains, cars, skibus et transports par câble des zones de montagne (Alpes, Pyrénées, Jura, Vosges, Massif central, Corse), tels que les montre le calque « Train, car et skibus » de l'app Soulane (https://soulane.app). Fabriqués le ${String(m.fabrique).slice(0, 10)} ; dernière archive : ${m.archive}.`,
+    `${m.arrets} arrêts, ${m.lignes} lignes, ${nets} jeux de données lus.`,
+    `Sources : horaires théoriques (GTFS) de transport.data.gouv.fr (France ; Licence Ouverte 2.0 ou ODbL selon le réseau, licence relue à chaque fabrication), d'opentransportdata.swiss (Suisse ; conditions d'utilisation de la plateforme : usage libre, source citée) et de l'ÖBB (Autriche ; CC BY 4.0, ÖBB-Personenverkehr AG). Base dérivée mise à disposition sous ODbL 1.0 (https://opendatacommons.org/licenses/odbl/1-0/). Modifications : seuls les arrêts et les lignes des zones de montagne sont gardés, arrêts proches du même nom réunis, sans horaires.`,
+    "Pas d'horaires ici : chaque arrêt renvoie à la page des horaires de son réseau."
+  ].join('\n\n')
+}
+
 /** Jeux publiés dans une version FIXE (manifeste qui nomme une archive au nom unique) : itinéraires de ski de rando,
  *  sentiers, topos Skitour. Chaque jeu dit sa version, ses fichiers, sa décision, ses textes. */
 const skiVersions = (next) => Object.fromEntries(Object.entries(next.regions ?? {}).map(([id, r]) => [id, r.version ?? null]))
@@ -447,6 +520,28 @@ export const FIXED_SETS = {
     describePrev: (prev) => `${prev.topos} topos`,
     state: (next, total) => ({ topos: next.topos, traces: next.traces, km: next.km, tuiles: total, gpx: next.gpx ?? null }),
     head: (next, total) => `**${next.topos} topos**, ${next.traces} tracés, ${next.km} km, ${total} tuiles (GPX : ${next.gpx?.telecharges ?? '?'} lus, ${next.gpx?.inchanges ?? '?'} inchangés)`
+  },
+  transports: {
+    release: TRANSIT_RELEASE,
+    title: 'Train, car et skibus (horaires théoriques des réseaux de montagne)',
+    label: 'Train, car et skibus',
+    stateFile: 'etat-transports.json',
+    tmpPrefix: 'transports-',
+    compare: (prev, next) => compareTransitManifests(prev, next),
+    archiveName: transitArchiveName,
+    toDrop: (assets, name) => transitArchivesToDrop(assets, name),
+    notes: transitReleaseNotes,
+    describePrev: (prev) => `${prev.arrets} arrêts`,
+    state: (next, total) => ({
+      arrets: next.arrets,
+      lignes: next.lignes,
+      tuiles: total,
+      erreurs: Object.fromEntries(Object.entries(next.reseaux ?? {}).filter(([, r]) => r.erreur).map(([id, r]) => [id, r.erreur]))
+    }),
+    head: (next, total) => {
+      const failed = Object.entries(next.reseaux ?? {}).filter(([, r]) => r.erreur).map(([id]) => id)
+      return `**${next.arrets} arrêts**, ${next.lignes} lignes, ${total} tuiles${failed.length ? ` (illisibles cette fois : ${failed.join(', ')})` : ''}`
+    }
   }
 }
 
@@ -534,7 +629,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const dir = resolve(process.argv[2] ?? '')
   const set = FIXED_SETS[process.env.JEU ?? '']
   if (!existsSync(join(dir, 'manifeste.json')) || (process.env.JEU && !set)) {
-    console.error('Usage : [JEU=skirando|sentiers|skitour] node outils/publier.mjs <dossier des tuiles> (avec son manifeste.json)')
+    console.error('Usage : [JEU=skirando|sentiers|skitour|transports] node outils/publier.mjs <dossier des tuiles> (avec son manifeste.json)')
     process.exit(2)
   }
   if (set) publishFixed(dir, set)

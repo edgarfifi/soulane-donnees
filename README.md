@@ -85,6 +85,28 @@ tuiles : `id` numéro du topo (page : `https://skitour.fr/topos/<id>`), `g` diff
   Ces fichiers restent sous la même licence. Modifications : seules les positions et le point haut des GPX sont gardés, sans
   simplification. Jamais les sorties ni les photos de Skitour (autre licence).
 
+## Train, car et skibus
+
+Tuiles vectorielles (MVT, couches `lignes` et `arrets`, zooms 8 à 13) et index des gares, arrêts de car et de skibus,
+téléphériques et funiculaires des zones de montagne (Alpes, Pyrénées, Jura, Vosges, Massif central, Corse), tels que les montre
+le calque « Train, car et skibus » de l'app [Soulane](https://soulane.app). Propriétés des tuiles : lignes `m` mode (`train`,
+`car`, `cable`, `tram`), `c` couleur, `n` numéro ; arrêts `i` indice dans l'index, `n` nom, `m` mode principal. `index.json` :
+réseaux (nom, page des horaires, source, licence), lignes (numéro, nom, couleurs, mode, période de validité), arrêts (position
+au 1/100 000 de degré, nom, lignes). Pas d'horaires.
+
+- **Version publiée** : dans la version fixe [`transports`](https://github.com/edgarfifi/soulane-donnees/releases/tag/transports) :
+  [`manifeste.json`](https://github.com/edgarfifi/soulane-donnees/releases/download/transports/manifeste.json) nomme l'archive à
+  prendre (`archive`) et compte les arrêts de chaque réseau ; les 3 archives les plus récentes sont gardées.
+- **Mise à jour** : chaque vendredi, automatiquement ([`.github/workflows/transports.yml`](.github/workflows/transports.yml)) :
+  les horaires théoriques (GTFS) de chaque réseau sont téléchargés un à un et lus en flux ([`outils/transports.mjs`](outils/transports.mjs)),
+  puis comparés à la version publiée : un réseau qui disparaît ou perd plus de la moitié de ses arrêts arrête la publication
+  ([`outils/publier.mjs`](outils/publier.mjs)). L'état du dernier passage est dans [`etat-transports.json`](etat-transports.json).
+- **Sources et licences** : [transport.data.gouv.fr](https://transport.data.gouv.fr) (France ; Licence Ouverte 2.0 ou ODbL
+  selon le réseau, relue à chaque passage, un jeu sous une autre licence n'est pas lu), [opentransportdata.swiss](https://opentransportdata.swiss)
+  (Suisse ; conditions d'utilisation de la plateforme), [ÖBB-Personenverkehr AG](https://data.oebb.at) (Autriche ; CC BY 4.0).
+  La liste des réseaux et de leurs producteurs : [soulane.app/sources](https://soulane.app/sources/). Cette base dérivée est mise
+  à disposition sous [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
+
 Les fichiers de ce dépôt sont tenus dans le dépôt de l'app Soulane (`scripts/soulane-donnees/`) ; `outils/pistes.mjs`,
-`outils/skirando.mjs`, `outils/sentiers.mjs` et `outils/skitour.mjs` y sont générés à partir du code de l'app : ne pas les
+`outils/skirando.mjs`, `outils/sentiers.mjs`, `outils/skitour.mjs` et `outils/transports.mjs` y sont générés à partir du code de l'app : ne pas les
 modifier ici.

@@ -1,0 +1,78 @@
+# Refait chaque semaine le calque « Train, car et skibus » de Soulane : télécharge un à un les horaires théoriques (GTFS) des
+# réseaux de montagne (transport.data.gouv.fr, dont la licence est relue à chaque fois ; opentransportdata.swiss ; ÖBB), garde
+# les arrêts et les lignes des zones de montagne, fabrique tuiles et index, puis publie dans la version fixe « transports » de
+# ce dépôt : soulane.app reprend la dernière à sa construction suivante (/donnees/transports/). Refuse de publier si un réseau
+# disparaît d'un coup (on garde la version d'avant). Dépôt public : minutes gratuites.
+# Fichier tenu dans le dépôt de l'app Soulane (scripts/soulane-donnees/), envoyé ici par scripts/pistes-outil.mjs --publier.
+name: Train, car et skibus
+
+on:
+  schedule:
+    # Vendredi 4 h 17 (UTC) : les pistes passent le lundi, le ski de rando le mardi, les sentiers le mercredi, Skitour le jeudi.
+    - cron: '17 4 * * 5'
+  workflow_dispatch:
+    inputs:
+      forcer:
+        description: "Publier même si les chiffres s'écartent beaucoup de la fois précédente (un réseau a vraiment fermé)"
+        type: boolean
+        default: false
+      crochet:
+        description: "Appeler le crochet de soulane.app même sans nouvelle version (essai : le site se reconstruit, environ 3 minutes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: transports
+  cancel-in-progress: false
+
+jobs:
+  transports:
+    runs-on: ubuntu-latest
+    # Les plus gros fichiers (Suisse, ÖBB, SNCF : environ 170 Mo chacun, plusieurs Go une fois lus) sont lus en flux, un à la fois.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Lire les horaires, fabriquer les tuiles et l'index
+        run: node --max-old-space-size=6144 outils/transports.mjs tuiles
+
+      - name: Vérifier puis publier
+        id: publier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCER: ${{ inputs.forcer && '1' || '' }}
+          JEU: transports
+        run: node outils/publier.mjs tuiles
+
+      - name: Demander la reconstruction de soulane.app (si un crochet de déploiement est rangé en secret)
+        if: steps.publier.outputs.publie == '1' || inputs.crochet
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            curl -fsS -X POST "$HOOK" > /dev/null && echo "Reconstruction de soulane.app demandée."
+          else
+            echo "Pas de crochet : soulane.app prendra la nouvelle version à sa prochaine construction (scripts/vercel-ignore.mjs la repère)."
+          fi
+
+      - name: Noter l'état (et garder le planning actif)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/transports.yml/enable" || true
+          if [ -f etat-transports.json ] && [ -n "$(git status --porcelain etat-transports.json)" ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add etat-transports.json
+            git commit -m "Train, car et skibus : $(node -p "require('./etat-transports.json').resultat") ($(date -u +%Y-%m-%d))"
+            git pull --rebase --quiet && git push
+          fi
