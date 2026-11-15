@@ -6,6 +6,7 @@
 //   JEU=sentiers node outils/publier.mjs <dossier des tuiles>    sentiers de rando balisés (outils/sentiers.mjs, sentiers.yml)
 //   JEU=skitour node outils/publier.mjs <dossier des tuiles>     topos Skitour (outils/skitour.mjs, skitour.yml)
 //   JEU=transports node outils/publier.mjs <dossier des tuiles>  train, car et skibus (outils/transports.mjs, transports.yml)
+//   JEU=clpa node outils/publier.mjs <dossier des tuiles>        couloirs d'avalanche de France, CLPA (outils/clpa.mjs, clpa.yml)
 // 1. Compare le manifeste neuf à celui de la version publiée :
 //    - même empreinte (mêmes tuiles) : rien à publier ;
 //    - chiffres trop éloignés (fichier tronqué, région manquante…) : ARRÊT sans publier, en erreur (GitHub prévient par
@@ -468,6 +469,73 @@ export function transitReleaseNotes(m) {
   ].join('\n\n')
 }
 
+/** Couloirs d'avalanche de France (CLPA de l'INRAE, outils/clpa.mjs) : une carte tenue à la main, mise à jour une fois par
+ *  an environ ; elle ne RÉTRÉCIT jamais d'un coup. Une baisse = une couche du WFS tronquée ou un massif perdu : on garde la
+ *  version d'avant. Les deux massifs (Alpes : 04, 05, 06, 38, 73, 74 ; Pyrénées : 09, 31, 64, 65, 66) doivent être là. */
+export const CLPA_LIMITS = {
+  minZones: 60000,
+  minLignes: 30000,
+  departements: [4, 5, 6, 9, 31, 38, 64, 65, 66, 73, 74],
+  zones: { down: 0.03, up: 0.3 },
+  lignes: { down: 0.03, up: 0.3 },
+  tuiles: { down: 0.05, up: 0.3 },
+  octets: { down: 0.1, up: 0.4 }
+}
+/** Version FIXE de la CLPA et archives gardées dedans. */
+export const CLPA_RELEASE = 'clpa'
+export const CLPA_KEEP = 3
+
+/** Décision PURE (CLPA), mêmes réponses que compareManifests. */
+export function compareClpaManifests(prev, next, limits = CLPA_LIMITS) {
+  const errors = []
+  if (!next || typeof next.zones !== 'number' || typeof next.lignes !== 'number' || !next.tuiles || !Array.isArray(next.zooms) || !/^\d{4}-\d{2}-\d{2}$/.test(String(next.version))) {
+    return { fresh: false, ok: false, errors: ['Manifeste neuf illisible.'] }
+  }
+  if (prev && prev.empreinte && prev.empreinte === next.empreinte) return { fresh: false, ok: true, errors: [] }
+  if (next.zones < limits.minZones) errors.push(`Seulement ${next.zones} zones (au moins ${limits.minZones} attendues).`)
+  if (next.lignes < limits.minLignes) errors.push(`Seulement ${next.lignes} lignes (au moins ${limits.minLignes} attendues).`)
+  const deps = Array.isArray(next.departements) ? next.departements : []
+  for (const d of limits.departements) if (!deps.includes(d)) errors.push(`Département ${String(d).padStart(2, '0')} absent.`)
+  for (const z of next.zooms) if (!(next.tuiles[z]?.tuiles > 0)) errors.push(`Aucune tuile au zoom ${z}.`)
+  if (prev && typeof prev.zones === 'number') {
+    // Leurs fichiers ne reviennent pas en arrière : une version plus ancienne que la publiée = un mauvais serveur.
+    if (typeof prev.version === 'string' && String(next.version) < prev.version) errors.push(`Version du ${next.version}, plus ancienne que la version publiée (${prev.version}).`)
+    if (outOf(next.zones, prev.zones, limits.zones)) errors.push(`${next.zones} zones contre ${prev.zones} la fois précédente (${pct(next.zones, prev.zones)}).`)
+    if (typeof prev.lignes === 'number' && outOf(next.lignes, prev.lignes, limits.lignes)) errors.push(`${next.lignes} lignes contre ${prev.lignes} la fois précédente (${pct(next.lignes, prev.lignes)}).`)
+    for (const [z, p] of Object.entries(prev.tuiles ?? {})) {
+      const n = next.tuiles[z]
+      if (!n) {
+        errors.push(`Zoom ${z} absent (présent la fois précédente).`)
+        continue
+      }
+      if (outOf(n.tuiles, p.tuiles, limits.tuiles)) errors.push(`Zoom ${z} : ${n.tuiles} tuiles contre ${p.tuiles} (${pct(n.tuiles, p.tuiles)}).`)
+      if (outOf(n.octets, p.octets, limits.octets)) errors.push(`Zoom ${z} : ${n.octets} octets contre ${p.octets} (${pct(n.octets, p.octets)}).`)
+    }
+  }
+  return { fresh: true, ok: errors.length === 0, errors }
+}
+
+/** Nom (unique, jamais remplacé) de l'archive d'une fabrication de la CLPA. */
+export function clpaArchiveName(fabrique, empreinte) {
+  return `clpa-${String(fabrique).slice(0, 10).replace(/-/g, '')}-${String(empreinte).slice(0, 12)}.tar.gz`
+}
+
+/** Archives à retirer de la version de la CLPA. PUR, comme skiArchivesToDrop. */
+export function clpaArchivesToDrop(names, current, keep = CLPA_KEEP) {
+  const archives = names.filter((n) => /^clpa-\d{8}-[0-9a-f]+\.tar\.gz$/.test(n) && n !== current).sort().reverse()
+  return archives.slice(Math.max(0, keep - 1))
+}
+
+/** Texte de la version de la CLPA (source, droit, ce qui est fait aux données). */
+export function clpaReleaseNotes(m) {
+  return [
+    `Tuiles vectorielles (MVT, couches « zones », « lignes », « fleches » et « numeros », zooms ${m.zooms.join(', ')}) de la Carte de localisation des phénomènes d'avalanche (CLPA) des Alpes françaises et des Pyrénées, telles que les montre le calque « Couloirs d'avalanche connus » de l'app Soulane (https://soulane.app). Fabriquées le ${String(m.fabrique).slice(0, 10)} ; dernière archive : ${m.archive}.`,
+    `${m.zones} zones et ${m.lignes} lignes ; fichiers de l'INRAE du ${m.version}${m.maj ? `, dernier objet mis à jour le ${m.maj}` : ''}.`,
+    "Source : CLPA © INRAE / ministère de la Transition écologique (https://www.avalanches.fr), lue dans le service WFS de l'INRAE. Informations publiques réutilisées avec leur source et leur date de mise à jour, sans en dénaturer le sens (code des relations entre le public et l'administration, articles L. 321-1 et suivants). Géométrie non modifiée : découpage en tuiles et arrondi à leur grille seulement.",
+    "Propriétés des tuiles : « s » origine (1 photo-interprétation et analyse de terrain, 2 recueil de témoignages), « c » code de la légende officielle (zones : 1 avalanche, 2 zone d'avalanches, 3 zone présumée avalancheuse, 4 souffle d'un aérosol ; lignes : avalanche localisée, écoulement ou liaison, présumés ou non), « a » cap de la flèche, « n » numéro de l'emprise. La CLPA est un document informatif, sans valeur réglementaire : elle ne couvre pas toute la montagne, et une zone sans emprise n'est pas une zone sans avalanche. Avant tout usage, lire son guide d'utilisation et sa légende (https://www.avalanches.fr/donnees-publiques-clpa/)."
+  ].join('\n\n')
+}
+
 /** Jeux publiés dans une version FIXE (manifeste qui nomme une archive au nom unique) : itinéraires de ski de rando,
  *  sentiers, topos Skitour. Chaque jeu dit sa version, ses fichiers, sa décision, ses textes. */
 const skiVersions = (next) => Object.fromEntries(Object.entries(next.regions ?? {}).map(([id, r]) => [id, r.version ?? null]))
@@ -542,6 +610,20 @@ export const FIXED_SETS = {
       const failed = Object.entries(next.reseaux ?? {}).filter(([, r]) => r.erreur).map(([id]) => id)
       return `**${next.arrets} arrêts**, ${next.lignes} lignes, ${total} tuiles${failed.length ? ` (illisibles cette fois : ${failed.join(', ')})` : ''}`
     }
+  },
+  clpa: {
+    release: CLPA_RELEASE,
+    title: "Couloirs d'avalanche de France (CLPA, INRAE)",
+    label: "Couloirs d'avalanche (CLPA)",
+    stateFile: 'etat-clpa.json',
+    tmpPrefix: 'clpa-',
+    compare: (prev, next) => compareClpaManifests(prev, next),
+    archiveName: clpaArchiveName,
+    toDrop: (assets, name) => clpaArchivesToDrop(assets, name),
+    notes: clpaReleaseNotes,
+    describePrev: (prev) => `${prev.zones} zones`,
+    state: (next, total) => ({ zones: next.zones, lignes: next.lignes, tuiles: total, version: next.version, maj: next.maj ?? null }),
+    head: (next, total) => `**${next.zones} zones**, ${next.lignes} lignes, ${total} tuiles (fichiers de l'INRAE du ${next.version})`
   }
 }
 
@@ -629,7 +711,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const dir = resolve(process.argv[2] ?? '')
   const set = FIXED_SETS[process.env.JEU ?? '']
   if (!existsSync(join(dir, 'manifeste.json')) || (process.env.JEU && !set)) {
-    console.error('Usage : [JEU=skirando|sentiers|skitour|transports] node outils/publier.mjs <dossier des tuiles> (avec son manifeste.json)')
+    console.error('Usage : [JEU=skirando|sentiers|skitour|transports|clpa] node outils/publier.mjs <dossier des tuiles> (avec son manifeste.json)')
     process.exit(2)
   }
   if (set) publishFixed(dir, set)

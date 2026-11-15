@@ -107,6 +107,30 @@ au 1/100 000 de degré, nom, lignes). Pas d'horaires.
   La liste des réseaux et de leurs producteurs : [soulane.app/sources](https://soulane.app/sources/). Cette base dérivée est mise
   à disposition sous [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
 
+## Couloirs d'avalanche de France (CLPA)
+
+Tuiles vectorielles (MVT, couches `zones`, `lignes`, `fleches` et `numeros`, zooms 10 à 14) de la
+[Carte de localisation des phénomènes d'avalanche](https://www.avalanches.fr/donnees-publiques-clpa/) (CLPA) des Alpes
+françaises et des Pyrénées, telles que les montre le calque « Couloirs d'avalanche connus » de l'app
+[Soulane](https://soulane.app). Propriétés : `s` origine (1 photo-interprétation et analyse de terrain, 2 recueil de
+témoignages), `c` code de la légende officielle, `a` cap de la flèche au bout d'un écoulement ou d'une liaison, `n` numéro de
+l'emprise.
+
+- **Version publiée** : dans la version fixe [`clpa`](https://github.com/edgarfifi/soulane-donnees/releases/tag/clpa) :
+  [`manifeste.json`](https://github.com/edgarfifi/soulane-donnees/releases/download/clpa/manifeste.json) nomme l'archive à
+  prendre (`archive`), la version des fichiers de l'INRAE (`version`) et la date du dernier objet mis à jour (`maj`) ; les
+  3 archives les plus récentes sont gardées.
+- **Mise à jour** : le 3 de chaque mois, automatiquement ([`.github/workflows/clpa.yml`](.github/workflows/clpa.yml)) : les
+  quatre couches sont lues dans le service WFS de l'INRAE ([`outils/clpa.mjs`](outils/clpa.mjs)), puis comparées à la version
+  publiée : une carte qui rétrécit ou un massif absent arrête la publication ([`outils/publier.mjs`](outils/publier.mjs)).
+  L'état du dernier passage est dans [`etat-clpa.json`](etat-clpa.json).
+- **Source et droit** : CLPA © INRAE / ministère de la Transition écologique. Informations publiques réutilisées avec leur
+  source et leur date de mise à jour, sans en dénaturer le sens (code des relations entre le public et l'administration,
+  articles L. 321-1 et suivants). Géométrie non modifiée : découpage en tuiles et arrondi à leur grille seulement. Les objets
+  hors de la légende officielle (code 16) ne sont pas repris, comme sur la carte de l'INRAE. La CLPA est un document
+  informatif, sans valeur réglementaire ; elle ne couvre pas toute la montagne. Avant tout usage, lire son guide
+  d'utilisation et sa légende sur [avalanches.fr](https://www.avalanches.fr/donnees-publiques-clpa/).
+
 Les fichiers de ce dépôt sont tenus dans le dépôt de l'app Soulane (`scripts/soulane-donnees/`) ; `outils/pistes.mjs`,
-`outils/skirando.mjs`, `outils/sentiers.mjs`, `outils/skitour.mjs` et `outils/transports.mjs` y sont générés à partir du code de l'app : ne pas les
+`outils/skirando.mjs`, `outils/sentiers.mjs`, `outils/skitour.mjs`, `outils/transports.mjs` et `outils/clpa.mjs` y sont générés à partir du code de l'app : ne pas les
 modifier ici.

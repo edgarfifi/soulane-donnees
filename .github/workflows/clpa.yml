@@ -1,0 +1,82 @@
+# Refait chaque mois les tuiles des couloirs d'avalanche de France : la Carte de localisation des phénomènes d'avalanche
+# (CLPA © INRAE / ministère de la Transition écologique, https://www.avalanches.fr), lue dans le service WFS de l'INRAE, et
+# les publie dans la version fixe « clpa » de ce dépôt : soulane.app reprend la dernière à sa construction suivante
+# (/donnees/clpa/z/x/y.pbf). La carte change peu (une mise à jour par an environ) ; leur serveur est souvent en panne : un
+# passage raté ne change rien, la version publiée reste. Refuse de publier si la carte rétrécit d'un coup.
+# Dépôt public : minutes gratuites ; GITHUB_TOKEN suffit. Fichier tenu dans le dépôt de l'app Soulane
+# (scripts/soulane-donnees/), envoyé ici par scripts/pistes-outil.mjs --publier.
+name: Couloirs d'avalanche (CLPA)
+
+on:
+  schedule:
+    # Le 3 de chaque mois, 3 h 47 (UTC).
+    - cron: '47 3 3 * *'
+  workflow_dispatch:
+    inputs:
+      forcer:
+        description: "Publier même si les chiffres s'écartent beaucoup de la fois précédente"
+        type: boolean
+        default: false
+      crochet:
+        description: "Appeler le crochet de soulane.app même sans nouvelle version (essai : le site se reconstruit, environ 3 minutes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: clpa
+  cancel-in-progress: false
+
+jobs:
+  clpa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Lire le WFS de l'INRAE et fabriquer les tuiles
+        run: node --max-old-space-size=6144 outils/clpa.mjs tuiles
+
+      - name: Vérifier puis publier
+        id: publier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCER: ${{ inputs.forcer && '1' || '' }}
+          JEU: clpa
+        run: node outils/publier.mjs tuiles
+
+      # Crochet de déploiement Vercel (secret VERCEL_DEPLOY_HOOK, le même que les pistes) : le site se reconstruit même si
+      # personne n'envoie de code. Appelé seulement quand une nouvelle version vient d'être publiée.
+      - name: Demander la reconstruction de soulane.app (si un crochet de déploiement est rangé en secret)
+        if: steps.publier.outputs.publie == '1' || inputs.crochet
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            curl -fsS -X POST "$HOOK" > /dev/null && echo "Reconstruction de soulane.app demandée."
+          else
+            echo "Pas de crochet : soulane.app prendra la nouvelle version à sa prochaine construction (scripts/vercel-ignore.mjs la repère)."
+          fi
+
+      - name: Noter l'état (et garder le planning actif)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GitHub coupe le planning d'un dépôt public sans activité depuis 60 jours : on le réactive à chaque passage,
+          # et l'état commité compte comme activité.
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/clpa.yml/enable" || true
+          if [ -f etat-clpa.json ] && [ -n "$(git status --porcelain etat-clpa.json)" ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add etat-clpa.json
+            git commit -m "Couloirs d'avalanche (CLPA) : $(node -p "require('./etat-clpa.json').resultat") ($(date -u +%Y-%m-%d))"
+            git pull --rebase --quiet && git push
+          fi
