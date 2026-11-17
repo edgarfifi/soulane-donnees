@@ -52,63 +52,63 @@ var TRANSIT_FEEDS = [
   // Trains et cars de toute la France (filtrés à la zone de montagne).
   tdg("sncf", "SNCF (TER, Intercit\xE9s, TGV)", "horaires-sncf", "https://www.sncf-connect.com/"),
   // Alpes du Nord : cars des départements, navettes des stations, réseaux des vallées.
-  tdg("cars-region-73", "Cars R\xE9gion Savoie", "reseau-interurbain-cars-region-savoie-73", "https://www.auvergnerhonealpes.fr/cars-region"),
-  tdg("cars-region-74", "Cars R\xE9gion Haute-Savoie", "reseau-interurbain-cars-region-haute-savoie-74", "https://www.auvergnerhonealpes.fr/cars-region"),
-  tdg("cars-region-38", "Cars R\xE9gion Is\xE8re", "reseau-interurbain-cars-region-isere-38-1", "https://www.auvergnerhonealpes.fr/cars-region"),
-  tdg("cars-region-01", "Cars R\xE9gion Ain", "reseau-interurbain-cars-region-ain-01", "https://www.auvergnerhonealpes.fr/cars-region"),
-  tdg("cars-region-26", "Cars R\xE9gion Dr\xF4me", "reseau-interurbain-et-scolaire-cars-region-drome-26", "https://www.auvergnerhonealpes.fr/cars-region"),
-  tdg("cars-region-express", "Cars R\xE9gion Express", "reseau-interurbain-cars-region-express", "https://www.auvergnerhonealpes.fr/cars-region"),
-  tdg("transaltitude", "Transaltitude (Is\xE8re)", "desserte-des-stations-de-ski-iseroises-transaltitude-38", "https://www.transaltitude.fr/"),
-  tdg("chamonix", "Chamonix Mobilit\xE9", "gtfs-reseau-chamonix-mobilite"),
+  tdg("cars-region-73", "Cars R\xE9gion Savoie", "reseau-interurbain-cars-region-savoie-73", "https://www.oura.com/"),
+  tdg("cars-region-74", "Cars R\xE9gion Haute-Savoie", "reseau-interurbain-cars-region-haute-savoie-74", "https://www.oura.com/"),
+  tdg("cars-region-38", "Cars R\xE9gion Is\xE8re", "reseau-interurbain-cars-region-isere-38-1", "https://www.oura.com/"),
+  tdg("cars-region-01", "Cars R\xE9gion Ain", "reseau-interurbain-cars-region-ain-01", "https://www.oura.com/"),
+  tdg("cars-region-26", "Cars R\xE9gion Dr\xF4me", "reseau-interurbain-et-scolaire-cars-region-drome-26", "https://www.oura.com/"),
+  tdg("cars-region-express", "Cars R\xE9gion Express", "reseau-interurbain-cars-region-express", "https://www.oura.com/"),
+  tdg("transaltitude", "Transaltitude (Is\xE8re)", "desserte-des-stations-de-ski-iseroises-transaltitude-38", "https://www.transaltitude.fr/fr/liste-des-stations-horaire-et-tarifs/"),
+  tdg("chamonix", "Chamonix Mobilit\xE9", "gtfs-reseau-chamonix-mobilite", "https://www.chamonix-mobilite.com/bus"),
   tdg("sibra", "Sibra (Annecy)", "offre-de-transports-sibra-a-annecy-gtfs"),
   tdg("aravis", "Aravis Bus", "aravis-bus-hiver-2025-2026"),
   tdg("giffre", "Navettes du Giffre", "les-navettes-du-giffre-horaires-hiver-2023-2024"),
-  tdg("thonon", "Star\u2019t (Thonon)", "start-horaires-du-reseau-de-lagglomeration-de-thonon"),
-  tdg("albertville", "TRA Mobilit\xE9 (Albertville)", "tra-mobilite-horaires-du-reseau-dalbertville"),
-  tdg("courchevel", "Skibus Courchevel", "skibus-courchevel-hiver", "https://www.courchevel.com/"),
-  tdg("courchevel-cable", "C\xE2bles de Courchevel", "transport-urbain-par-cable-hiver-2025-26"),
+  tdg("thonon", "Star\u2019t (Thonon)", "start-horaires-du-reseau-de-lagglomeration-de-thonon", "https://www.star-t.fr/se-deplacer/lignes-et-horaires"),
+  tdg("albertville", "TRA Mobilit\xE9 (Albertville)", "tra-mobilite-horaires-du-reseau-dalbertville", "https://savoie.transdev.com/les-horaires/"),
+  tdg("courchevel", "Skibus Courchevel", "skibus-courchevel-hiver"),
+  tdg("courchevel-cable", "C\xE2bles de Courchevel", "transport-urbain-par-cable-hiver-2025-26", "https://www.mairie-courchevel.com/services-et-infos-pratiques/transports-stationnement/transport-urbain-par-cable.html"),
   tdg("belleville", "Skibus Vall\xE9e des Belleville", "skibus-vallee-des-belleville"),
-  tdg("meribus", "M\xE9ribus", "meribus-ete"),
+  tdg("meribus", "M\xE9ribus", "meribus-ete", "https://www.meribel.net/informations-pratiques/navettes-meribus/"),
   tdg("valmorel", "Valmobus", "horaires-theoriques-et-temps-reel-de-la-station-de-ski-valmorel-gtfs-gtfs-rt"),
   tdg("tignes", "Navettes de Tignes", "navettes-tignes"),
   tdg("val-isere", "Navettes de Val d\u2019Is\xE8re", "navettes-val-disere"),
   tdg("bourg-st-maurice", "Navettes de Bourg-Saint-Maurice", "navettes-bourg-saint-maurice"),
   tdg("arcs-funiculaire", "Funiculaire des Arcs", "funiculaire-des-arcs"),
-  tdg("rosiere", "Navettes de La Rosi\xE8re", "navettes-la-rosiere"),
+  tdg("rosiere", "Navettes de La Rosi\xE8re", "navettes-la-rosiere", "https://www.mairie-montvalezan.fr/mobilite-transport/"),
   tdg("saisies", "Navette Col\u2019ette (Les Saisies)", "navette-colette-savoie-les-saisies"),
   tdg("alpe-huez", "Navettes de l\u2019Alpe d\u2019Huez", "horaires-theoriques-et-temps-reel-des-navettes-hivernales-de-lalpe-dhuez-gtfs-gtfs-rt"),
-  tdg("deux-alpes", "Navettes des 2 Alpes", "gtfs-les-2alpes-saison-hiver-2025-2026"),
+  tdg("deux-alpes", "Navettes des 2 Alpes", "gtfs-les-2alpes-saison-hiver-2025-2026", "https://www.autocars-resalp.com/lignes-horaires/navettes-station-2-alpes"),
   tdg("eau-dolle", "T\xE9l\xE9cabine Eau d\u2019Olle Express", "telecabine-eau-dolle-express-allemond-oz"),
-  tdg("bastille", "T\xE9l\xE9ph\xE9rique de la Bastille", "horaires-theoriques-du-telepherique-de-la-bastille"),
+  tdg("bastille", "T\xE9l\xE9ph\xE9rique de la Bastille", "horaires-theoriques-du-telepherique-de-la-bastille", "https://bastille-grenoble.fr/horaires/"),
   // Alpes du Sud.
-  tdg("zou-express", "ZOU ! Express", "lignes-des-reseaux-transport-zou-provence-alpes-cote-d-azur-express-3-3", "https://zou.maregionsud.fr/"),
-  tdg("zou-proximite", "ZOU ! Proximit\xE9", "lignes-des-reseaux-transport-zou-provence-alpes-cote-d-azur-proximite-3-3", "https://zou.maregionsud.fr/"),
-  tdg("zou-trains", "Trains ZOU !", "trains-zou-en-provence-alpes-cote-dazur", "https://zou.maregionsud.fr/"),
-  tdg("lignes-azur", "Lignes d\u2019Azur", "donnees-statiques-et-dynamiques-du-reseau-de-transport-lignes-dazur", "https://www.lignesdazur.com/"),
-  tdg("altigo", "Altigo (Brian\xE7onnais)", "donnees-de-transport-en-commun-reseau-altigo-communaute-de-communes-du-brianconnais-format-gtfs"),
-  tdg("queyras", "Navettes du Guillestrois et du Queyras", "reseau-de-transports-collectifs-de-la-ccgq"),
+  tdg("zou-express", "ZOU ! Express", "lignes-des-reseaux-transport-zou-provence-alpes-cote-d-azur-express-3-3", "https://zou.maregionsud.fr/fiches-horaires"),
+  tdg("zou-proximite", "ZOU ! Proximit\xE9", "lignes-des-reseaux-transport-zou-provence-alpes-cote-d-azur-proximite-3-3", "https://zou.maregionsud.fr/fiches-horaires"),
+  tdg("zou-trains", "Trains ZOU !", "trains-zou-en-provence-alpes-cote-dazur", "https://zou.maregionsud.fr/fiches-horaires"),
+  tdg("lignes-azur", "Lignes d\u2019Azur", "donnees-statiques-et-dynamiques-du-reseau-de-transport-lignes-dazur"),
+  tdg("altigo", "Altigo (Brian\xE7onnais)", "donnees-de-transport-en-commun-reseau-altigo-communaute-de-communes-du-brianconnais-format-gtfs", "https://www.monaltigo.fr/reseau-et-horaires"),
+  tdg("queyras", "Navettes du Guillestrois et du Queyras", "reseau-de-transports-collectifs-de-la-ccgq", "https://www.ccguillestroisqueyras.fr/vivre/deplacements/"),
   tdg("ecrins", "Bus du Pays des \xC9crins", "transports-en-commun-pays-des-ecrins"),
   tdg("vai-stations", "Navettes des stations (Va\xEF)", "navettes-stations-hiver-2025-2026-reseau-vai"),
   tdg("vai-embrun", "Va\xEF Embrun", "reseau-vai-embrun"),
   tdg("gap", "L\u2019Agglo en Bus (Gap)", "horaires-theoriques-et-temps-reels-du-reseau-de-transports-lagglo-en-bus-communaute-dagglomeration-gap-tallard-durance"),
   // Pyrénées.
-  tdg("lio", "liO Occitanie", "reseau-lio-occitanie", "https://lio.laregion.fr/"),
+  tdg("lio", "liO Occitanie", "reseau-lio-occitanie", "https://www.lio-occitanie.fr/horaires-et-plans/"),
   tdg("pyr-atl", "Cars des Pyr\xE9n\xE9es-Atlantiques", "arrets-horaires-et-parcours-theoriques-des-reseaux-naq-pat-nva-m-1"),
-  tdg("tlp", "TLP Mobilit\xE9s (Tarbes, Lourdes)", "horaires-theoriques-du-reseau-tarbes-lourdes-tlp-mobilites-gtfs"),
+  tdg("tlp", "TLP Mobilit\xE9s (Tarbes, Lourdes)", "horaires-theoriques-du-reseau-tarbes-lourdes-tlp-mobilites-gtfs", "https://www.tlp-mobilites.com/horaires-et-plans-des-lignes-de-bus/"),
   tdg("la-mongie", "Navettes Bagn\xE8res-de-Bigorre, La Mongie", "horaires-theoriques-et-temps-reel-des-navettes-de-la-ligne-bagneres-la-mongie-gtfs-gtfs-rt"),
   tdg("arrens", "Ligne Arrens-Marsous, Lourdes", "tad-arrens-marsous-lourdes"),
-  tdg("foix", "L\u2019Agglobus (Foix)", "reseau-lagglo-bus-de-lagglo-foix-varilhes"),
+  tdg("foix", "L\u2019Agglobus (Foix)", "reseau-lagglo-bus-de-lagglo-foix-varilhes", "https://lagglobus.fr/horaires-des-lignes/"),
   // Massif central, Vosges, Jura.
-  tdg("cars-region-63", "Cars R\xE9gion Puy-de-D\xF4me", "reseau-interurbain-cars-region-puy-de-dome-63", "https://www.auvergnerhonealpes.fr/cars-region"),
-  tdg("cars-region-15", "Cars R\xE9gion Cantal", "reseau-interurbain-cars-region-cantal-15", "https://www.auvergnerhonealpes.fr/cars-region"),
-  tdg("cars-region-43", "Cars R\xE9gion Haute-Loire", "reseau-interurbain-cars-region-haute-loire-43", "https://www.auvergnerhonealpes.fr/cars-region"),
-  tdg("fluo-68", "Fluo Grand Est (Haut-Rhin)", "offre-de-transport-du-reseau-fluo-grand-est-haut-rhin-68", "https://www.fluo.eu/"),
-  tdg("fluo-88", "Fluo Grand Est (Vosges)", "offre-de-transport-du-reseau-fluo-grand-est-vosges-88", "https://www.fluo.eu/"),
-  tdg("mobigo", "Mobigo (Bourgogne-Franche-Comt\xE9)", "reseau-de-transport-interurbain-mobigo-en-bourgogne-franche-comte", "https://www.viamobigo.fr/"),
+  tdg("cars-region-63", "Cars R\xE9gion Puy-de-D\xF4me", "reseau-interurbain-cars-region-puy-de-dome-63", "https://www.oura.com/"),
+  tdg("cars-region-15", "Cars R\xE9gion Cantal", "reseau-interurbain-cars-region-cantal-15", "https://www.oura.com/"),
+  tdg("cars-region-43", "Cars R\xE9gion Haute-Loire", "reseau-interurbain-cars-region-haute-loire-43", "https://www.oura.com/"),
+  tdg("fluo-68", "Fluo Grand Est (Haut-Rhin)", "offre-de-transport-du-reseau-fluo-grand-est-haut-rhin-68", "https://www.fluo.grandest.fr/fiches-horaires"),
+  tdg("fluo-88", "Fluo Grand Est (Vosges)", "offre-de-transport-du-reseau-fluo-grand-est-vosges-88", "https://www.fluo.grandest.fr/fiches-horaires"),
+  tdg("mobigo", "Mobigo (Bourgogne-Franche-Comt\xE9)", "reseau-de-transport-interurbain-mobigo-en-bourgogne-franche-comte", "https://www.viamobigo.fr/fr/horaires/23"),
   // Corse.
   tdg("corse-cars", "Cars de Corse", "gtfs-transport-via-strada"),
-  tdg("corse-train", "Chemins de fer de la Corse", "gtfs-transport-horaires-chemins-de-fer-corse-1", "https://cf-corse.corsica/"),
-  tdg("restonica", "Navette de la Restonica", "gtfs-transport-via-corsica-corte-a-la-vallee-de-la-restonica-ligne-c13"),
+  tdg("corse-train", "Chemins de fer de la Corse", "gtfs-transport-horaires-chemins-de-fer-corse-1", "https://cf-corse.corsica/horaires/"),
+  tdg("restonica", "Navette de la Restonica", "gtfs-transport-via-corsica-corte-a-la-vallee-de-la-restonica-ligne-c13", "https://www.isula.corsica/Navetta-Restonica-C13_a4624.html"),
   // Suisse : tout le pays (trains, cars postaux, téléphériques), filtré à la zone de montagne. Conditions d'utilisation
   // d'opentransportdata.swiss : données libres (aussi pour un usage commercial), traitées et republiées, à condition de citer
   // la source et de les tenir à jour aussi souvent que la source (chaque semaine).
@@ -137,6 +137,7 @@ var TRANSIT_FEEDS = [
     horaires: "https://fahrplan.oebb.at/"
   }
 ];
+var SCHEDULE_PAGES = new Set(TRANSIT_FEEDS.map((f) => f.horaires).filter((u) => !!u));
 function yearCandidates(url, now = /* @__PURE__ */ new Date()) {
   if (!url.includes("{annee}")) return [url];
   const y = now.getUTCFullYear();
@@ -747,7 +748,7 @@ async function tdgResources(slug) {
   if (!licence) throw new Error(`jeu ${slug} : licence \xAB ${d.licence} \xBB non accept\xE9e`);
   const urls = (d.resources ?? []).filter((x) => x.format === "GTFS" && x.is_available !== false && typeof x.url === "string").map((x) => x.url);
   if (!urls.length) throw new Error(`jeu ${slug} : aucun GTFS disponible`);
-  return { urls: [...new Set(urls)], licence, page: d.page_url ?? `https://transport.data.gouv.fr/datasets/${slug}` };
+  return { urls: [...new Set(urls)], licence };
 }
 async function firstAvailable(urls) {
   for (const u of urls) {
@@ -864,7 +865,7 @@ async function readCsv(file, entries, name, cols, onRow) {
   handle(rest + dec.decode());
   return true;
 }
-async function readFeed(feed, file, source, licence, page) {
+async function readFeed(feed, file, source, licence) {
   const entries = zipEntries(file);
   const agencies = /* @__PURE__ */ new Map();
   await readCsv(file, entries, "agency.txt", ["agency_id", "agency_name", "agency_url"], (r) => agencies.set(r.agency_id, { name: r.agency_name, url: r.agency_url }));
@@ -968,8 +969,7 @@ async function readFeed(feed, file, source, licence, page) {
     const a = agencies.get(agencyId) ?? (agencies.size === 1 ? [...agencies.values()][0] : void 0);
     const key = `${feed.id}:${feed.pays === "fr" ? "" : a?.name ?? ""}`;
     if (!netKeys.has(key)) {
-      const agencyUrl = a?.url && /^https?:\/\//.test(a.url) ? a.url.replace(/^http:/, "https:") : "";
-      const url = feed.pays === "fr" ? feed.horaires ?? (agencyUrl || page) : agencyUrl || (feed.horaires ?? page);
+      const url = feed.horaires ?? "";
       const name = feed.pays === "fr" ? feed.nom : a?.name?.trim() || feed.nom;
       result.networks.push({ key, net: { n: name, u: url, s: source, l: licence } });
       netKeys.set(key, key);
@@ -1036,25 +1036,22 @@ for (const feed of TRANSIT_FEEDS) {
     let urls;
     let source;
     let licence;
-    let page;
     if ("tdg" in feed.source) {
       const res = await tdgResources(feed.source.tdg);
       urls = res.urls;
       source = "transport.data.gouv.fr";
       licence = res.licence.name;
-      page = res.page;
     } else {
       urls = [await firstAvailable(yearCandidates(feed.source.url))];
       source = feed.source.producteur;
       licence = feed.source.licence.name;
-      page = feed.horaires ?? feed.source.url;
     }
     let arrets = 0;
     let lignes = 0;
     for (const [n, url] of urls.entries()) {
       const file = join(work, `${feed.id}-${n}.zip`);
       if (!cacheDir || !existsSync(file)) await download(url, file);
-      const r = await readFeed(feed, file, source, licence, page);
+      const r = await readFeed(feed, file, source, licence);
       if (!cacheDir) rmSync(file, { force: true });
       const lineIdx = [];
       for (const { key, net } of r.networks) {
