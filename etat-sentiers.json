@@ -1,20 +1,20 @@
 {
- "verifie": "2026-11-11T11:49:58.784Z",
+ "verifie": "2026-11-18T13:27:42.237Z",
  "resultat": "publie",
- "itineraires": 125823,
- "km": 621238,
- "tuiles": 35946,
+ "itineraires": 125940,
+ "km": 621880,
+ "tuiles": 35960,
  "source_dates": {
-  "france": "2026-11-10T10:02:20.000Z",
-  "spain": "2026-11-09T01:31:10.000Z",
-  "andorra": "2026-11-10T10:03:11.000Z",
-  "switzerland": "2026-11-09T00:07:02.000Z",
-  "liechtenstein": "2026-11-09T00:55:47.000Z",
-  "italy": "2026-11-09T00:07:27.000Z",
-  "austria": "2026-11-09T00:04:33.000Z",
-  "bayern": "2026-11-09T02:32:10.000Z",
-  "monaco": "2026-11-10T10:14:56.000Z"
+  "france": "2026-11-18T01:00:46.000Z",
+  "spain": "2026-11-18T00:35:40.000Z",
+  "andorra": "2026-11-18T00:33:50.000Z",
+  "switzerland": "2026-11-18T00:37:57.000Z",
+  "liechtenstein": "2026-11-18T00:36:19.000Z",
+  "italy": "2026-11-18T00:39:07.000Z",
+  "austria": "2026-11-18T00:46:04.000Z",
+  "bayern": "2026-11-18T01:33:44.000Z",
+  "monaco": "2026-11-18T00:50:13.000Z"
  },
- "empreinte": "ab163906770e088540653a29cd414200f54f661382f33eee89cbda87adabd9d8",
- "archive": "sentiers-20261111-ab163906770e.tar.gz"
+ "empreinte": "5674c70e3384c34d6abcf95d9951b8415659328ed2ddcbf3101ea087646a14b9",
+ "archive": "sentiers-20261118-5674c70e3384.tar.gz"
 }
