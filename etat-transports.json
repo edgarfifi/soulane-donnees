@@ -1,10 +1,10 @@
 {
- "verifie": "2026-11-15T13:59:20.743Z",
+ "verifie": "2026-11-20T12:59:31.361Z",
  "resultat": "publie",
- "arrets": 28394,
- "lignes": 4068,
- "tuiles": 10740,
+ "arrets": 28391,
+ "lignes": 4070,
+ "tuiles": 10745,
  "erreurs": {},
- "empreinte": "021141d501b6059d06ad3e996d57a74584badd19c4aa3bba72971f1862f98422",
- "archive": "transports-20261115-021141d501b6.tar.gz"
+ "empreinte": "d49b42a97196d969fcfb7b015d393704bce41471571285dfcd5351b668c47500",
+ "archive": "transports-20261120-d49b42a97196.tar.gz"
 }
