@@ -1423,6 +1423,7 @@ var MESH_SLOTS = (4 ** MESH_LEVELS - 1) / 3;
 var MESH_PACK_MAGIC = 827150931;
 var MESH_NODE_MAGIC = 827216467;
 var MESH_PACK_HEADER_BYTES = 32;
+var MESH_PART_UNIT = 4294967296;
 var MESH_SLOT_BYTES = 12;
 var MESH_INDEX_BYTES = MESH_PACK_HEADER_BYTES + MESH_SLOTS * MESH_SLOT_BYTES;
 var MESH_NODE_HEADER_BYTES = 64;
@@ -1948,27 +1949,41 @@ function assemble(partDir, outDir, px, py, blocDir) {
   top.close();
   const offsets = new Float64Array(MESH_SLOTS);
   const lengths = new Uint32Array(MESH_SLOTS);
-  const sources = [dataFile + ".haut"];
-  for (let y = py * 4; y < py * 4 + 4; y++) for (let x = px * 4; x < px * 4 + 4; x++) sources.push(join(partDir, `14_${x}_${y}.noeuds`));
-  const fd = openSync(file + ".part", "w");
-  writeSync(fd, new Uint8Array(MESH_INDEX_BYTES));
-  let off = MESH_INDEX_BYTES;
+  let total = 0;
   let nodes = 0;
-  for (const src of sources) {
-    if (!existsSync(src)) continue;
+  const copyNodes = (src, fdOut, part2, start) => {
+    let off2 = start;
+    if (!existsSync(src)) return off2;
     const buf = readFileSync(src);
     let o = 0;
     while (o + 8 <= buf.length) {
       const slot = buf.readUInt32LE(o);
       const len = buf.readUInt32LE(o + 4);
-      writeSync(fd, buf, o + 8, len);
-      offsets[slot] = off;
+      writeSync(fdOut, buf, o + 8, len);
+      offsets[slot] = part2 * MESH_PART_UNIT + off2;
       lengths[slot] = len;
-      off += len;
+      off2 += len;
       o += 8 + len;
       nodes++;
     }
-  }
+    return off2;
+  };
+  let part = 0;
+  for (let j = 0; j < 4; j++)
+    for (let i = 0; i < 4; i++) {
+      part++;
+      const src = join(partDir, `14_${px * 4 + i}_${py * 4 + j}.noeuds`);
+      if (!existsSync(src)) continue;
+      const pf = join(outDir, "12", String(px), `${py}-${part}.srm`);
+      const pfd = openSync(pf + ".part", "w");
+      total += copyNodes(src, pfd, part, 0);
+      closeSync(pfd);
+      renameSync(pf + ".part", pf);
+    }
+  const fd = openSync(file + ".part", "w");
+  writeSync(fd, new Uint8Array(MESH_INDEX_BYTES));
+  const off = copyNodes(dataFile + ".haut", fd, 0, MESH_INDEX_BYTES);
+  total += off;
   writeSync(fd, writeMeshPackIndex(px, py, meshPackScale(py), offsets, lengths), 0, MESH_INDEX_BYTES, 0);
   closeSync(fd);
   renameSync(file + ".part", file);
@@ -2009,7 +2024,7 @@ function assemble(partDir, outDir, px, py, blocDir) {
     closeSync(fd2);
     renameSync(tf + ".part", tf);
   }
-  console.log(`paquet ${px}/${py} : ${nodes} n\u0153uds, ${(off / 1e6).toFixed(1)} Mo ; ${trees} arbres, ${(tAt / 1e6).toFixed(1)} Mo ; ${((performance.now() - T0) / 1e3).toFixed(0)} s`);
+  console.log(`paquet ${px}/${py} : ${nodes} n\u0153uds, ${(total / 1e6).toFixed(1)} Mo ; ${trees} arbres, ${(tAt / 1e6).toFixed(1)} Mo ; ${((performance.now() - T0) / 1e3).toFixed(0)} s`);
 }
 function manifest(outDir) {
   const packs = [];
@@ -2018,7 +2033,7 @@ function manifest(outDir) {
   if (existsSync(d12))
     for (const x of readdirSync(d12))
       for (const f of readdirSync(join(d12, x))) {
-        if (f.endsWith(".srm")) packs.push(`${x}/${f.replace(".srm", "")}`);
+        if (/^\d+\.srm$/.test(f)) packs.push(`${x}/${f.replace(".srm", "")}`);
         if (f.endsWith(".sra")) trees.push(`${x}/${f.replace(".sra", "")}`);
       }
   writeFileSync(join(outDir, "manifest.json"), JSON.stringify({ version: 2, packs, trees }));

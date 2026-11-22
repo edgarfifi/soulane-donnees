@@ -33,7 +33,7 @@ def main():
             shutil.copy(os.path.join(travail, f), sortie)
     with open(os.path.join(sortie, f'14_{x14}_{y14}.journal.json'), 'w', encoding='utf-8') as f:
         json.dump({'tuile': f'{x14}/{y14}', 'secondes': round(time.time() - T0), 'blocs': journal, 'paquet_ok': r.returncode == 0}, f, ensure_ascii=False, indent=1)
-    if r.returncode:
+    if r.returncode or not any(b['bloc_ok'] for b in journal):
         sys.exit(1)
 
 

@@ -242,6 +242,31 @@ def main():
     # depuis leur centre (le bord du bloc, bien plus long, reste ouvert). Contrôle du 22/11 : des taches de ciel au
     # travers d'une paroi du couloir A6. (PyMeshLab le faisait aussi, mais en 18 min par bloc.)
     mesh = close_holes(mesh, 800)
+    # 4 ter. BÂTIMENTS (batiments.py) : murs droits et toits mesurés, ajoutés à la surface du bloc (le sol passe dessous,
+    # interpolé). Leurs murs sont marqués (canopée = 253) : le moteur les teinte en neutre.
+    from scipy.interpolate import LinearNDInterpolator as _LI
+    from batiments import batiments
+    gsrc = P[: len(c[keep])][c[keep] == 2]  # (P : points gardés, puis points ajoutés ; c[keep] couvre les premiers)
+    gsrc = gsrc[:: max(1, len(gsrc) // 300000)]
+    _f = _LI(gsrc[:, :2], gsrc[:, 2])
+
+    def sol_z(X, Y):
+        zz = _f(X - ox, Y - oy)
+        bad = ~np.isfinite(zz)
+        if bad.any():
+            from scipy.interpolate import NearestNDInterpolator
+            zz[bad] = NearestNDInterpolator(gsrc[:, :2], gsrc[:, 2])(X[bad] - ox, Y[bad] - oy)
+        return zz + oz
+
+    BV, BT, BM = batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz)
+    n_bat_v = len(BV)
+    if n_bat_v:
+        nv0 = len(mesh.vertices)
+        mesh.vertices = o3d.utility.Vector3dVector(np.r_[np.asarray(mesh.vertices), BV])
+        mesh.triangles = o3d.utility.Vector3iVector(np.r_[np.asarray(mesh.triangles), BT + nv0].astype(np.int32))
+    wall = np.zeros(len(mesh.vertices), bool)
+    if n_bat_v:
+        wall[-n_bat_v:] = BM
     chrono['rognage'] = time.time() - T0
     # 4 bis. CANOPÉE au-dessus de chaque sommet (MHC à 1 m : végétation la plus haute de la case moins le sol) : de près le
     # sol sous les arbres devient un sous-bois, au loin la forêt garde son volume (moteur, nœuds grossiers).
@@ -260,6 +285,7 @@ def main():
     can = np.clip(top[vj, vi] - (V[:, 2] + oz), 0, 63).astype(np.float32)
     can[V[:, 2] + oz > top[vj, vi]] = 0
     canopy = np.clip(np.round(can * 4), 0, 252).astype(np.uint8)  # pas de 25 cm
+    canopy[wall] = 253  # murs des bâtiments
     # 5. repère de la tuile z12 (mètres vrais), via WGS84 → mercator
     lon, lat = TO_WGS.transform(V[:, 0] + ox, V[:, 1] + oy)
     mx = (np.asarray(lon) + 180) / 360
@@ -313,7 +339,7 @@ def main():
     head_json = {
         'z': 16, 'x': x16, 'y': y16, 'x12': x12, 'y12': y12, 'k': k, 'latc': latc,
         'emprise': [float(cx0), float(cy0), float(cx1), float(cy1)],
-        'version': 2, 'sommets': int(len(W)), 'triangles': int(len(T)), 'points': int(len(P)), 'points_ajoutes': int(n_fill), 'raide': round(raide, 4), 'profondeur': depth,
+        'version': 2, 'sommets': int(len(W)), 'triangles': int(len(T)), 'batiments_sommets': int(n_bat_v), 'points': int(len(P)), 'points_ajoutes': int(n_fill), 'raide': round(raide, 4), 'profondeur': depth,
         'secondes': {a: round(b, 1) for a, b in chrono.items()} | {'total': round(time.time() - T0, 1)}
     }
     os.makedirs(sortie, exist_ok=True)

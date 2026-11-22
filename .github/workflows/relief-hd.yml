@@ -57,7 +57,7 @@ jobs:
 
       - name: Outils
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq libgl1 libgomp1 > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq libgl1 libegl1 libgomp1 libx11-6 > /dev/null
           pip install -r relief-hd/requirements.txt
 
       - name: Fabriquer la tuile ${{ matrix.tuile }}
