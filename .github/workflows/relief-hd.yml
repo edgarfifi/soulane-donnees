@@ -63,9 +63,10 @@ jobs:
       - name: Accès aux dalles de l'IGN
         run: |
           # Une dalle de Courchevel : code HTTP, taille et durée (le téléchargement échouait sans dire pourquoi).
-          curl -sS -L -o /dev/null -A 'Mozilla/5.0 (relief-hd)' -w '%{http_code} %{size_download} %{time_total}
-'             'https://data.geopf.fr/telechargement/download/LiDARHD-NUALID/NUALHD_1-0__LAZ_LAMB93_QM_2025-02-20/LHD_FXX_0981_6483_PTS_LAMB93_IGN69.copc.laz' || true
-          curl -sS -I -A 'Mozilla/5.0 (relief-hd)' 'https://data.geopf.fr/telechargement/download/LiDARHD-NUALID/NUALHD_1-0__LAZ_LAMB93_QM_2025-02-20/LHD_FXX_0981_6483_PTS_LAMB93_IGN69.copc.laz' | head -20 || true
+          U='https://data.geopf.fr/telechargement/download/LiDARHD-NUALID/NUALHD_1-0__LAZ_LAMB93_QM_2025-02-20/LHD_FXX_0981_6483_PTS_LAMB93_IGN69.copc.laz'
+          curl -sS -L -o /dev/null -A 'Mozilla/5.0 (relief-hd)' -w 'code %{http_code} taille %{size_download} duree %{time_total}' "$U" || true
+          echo
+          curl -sS -I -A 'Mozilla/5.0 (relief-hd)' "$U" | head -20 || true
 
       - name: Fabriquer la tuile ${{ matrix.tuile }}
         env:
