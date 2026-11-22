@@ -15,22 +15,28 @@ def main():
     os.makedirs(travail, exist_ok=True)
     os.makedirs(sortie, exist_ok=True)
     T0 = time.time()
-    journal = []
-    for j in range(4):
-        for i in range(4):
-            x16, y16 = x14 * 4 + i, y14 * 4 + j
-            t = time.time()
-            r = subprocess.run([sys.executable, os.path.join(here, 'bloc.py'), str(x16), str(y16), dalles, travail], capture_output=True, text=True)
-            r2 = subprocess.run([sys.executable, os.path.join(here, 'arbres.py'), str(x16), str(y16), dalles, travail], capture_output=True, text=True)
-            lignes = r.stdout.strip().splitlines()
-            last = (lignes or [''])[-1][:300]
-            # Un bloc sans aucun point n'est PAS réussi (22/11/2026 : dalles refusées au téléchargement, 16 blocs vides
-            # comptés réussis) ; les lignes des dalles ratées sont gardées dans le journal.
-            vide = last.startswith('aucun point')
-            journal.append({'bloc': f'{x16}/{y16}', 'secondes': round(time.time() - t), 'bloc_ok': r.returncode == 0 and not vide, 'arbres_ok': r2.returncode == 0, 'fin': last,
-                            'dalles': [l[:300] for l in lignes if l.startswith('dalle') or l.startswith('DALLE')][:8],
-                            'erreur': (r.stderr.strip().splitlines() or [''])[-1][:300] if r.returncode else ''})
-            print(json.dumps(journal[-1], ensure_ascii=False), flush=True)
+
+    def un_bloc(x16, y16):
+        t = time.time()
+        r = subprocess.run([sys.executable, os.path.join(here, 'bloc.py'), str(x16), str(y16), dalles, travail], capture_output=True, text=True)
+        r2 = subprocess.run([sys.executable, os.path.join(here, 'arbres.py'), str(x16), str(y16), dalles, travail], capture_output=True, text=True)
+        lignes = r.stdout.strip().splitlines()
+        last = (lignes or [''])[-1][:300]
+        # Un bloc sans aucun point n'est PAS réussi (22/11/2026 : dalles refusées au téléchargement, 16 blocs vides
+        # comptés réussis) ; les lignes des dalles ratées sont gardées dans le journal.
+        vide = last.startswith('aucun point')
+        e = {'bloc': f'{x16}/{y16}', 'secondes': round(time.time() - t), 'bloc_ok': r.returncode == 0 and not vide, 'arbres_ok': r2.returncode == 0, 'fin': last,
+             'dalles': [l[:300] for l in lignes if l.startswith('dalle') or l.startswith('DALLE')][:8],
+             'erreur': (r.stderr.strip().splitlines() or [''])[-1][:300] if r.returncode else ''}
+        print(json.dumps(e, ensure_ascii=False), flush=True)
+        return e
+
+    # Blocs fabriqués PAR DEUX (22/11/2026) : une machine du cloud a 4 cœurs et 16 Go, un bloc n'en occupait qu'une part.
+    # Mêmes calculs, même résultat ; RELIEF_PARALLELE=1 pour revenir à un seul à la fois.
+    from concurrent.futures import ThreadPoolExecutor
+    blocs = [(x14 * 4 + i, y14 * 4 + j) for j in range(4) for i in range(4)]
+    with ThreadPoolExecutor(max_workers=max(1, int(os.environ.get('RELIEF_PARALLELE', '2')))) as ex:
+        journal = list(ex.map(lambda b: un_bloc(*b), blocs))
     r = subprocess.run(['node', paquet, 'partiel', travail, sortie, f'{x14}/{y14}'], capture_output=True, text=True)
     print(r.stdout[-2000:], r.stderr[-2000:], flush=True)
     for f in os.listdir(travail):

@@ -56,7 +56,7 @@ def dalle(dossier, X, Y):
     url = f'https://data.geopf.fr/telechargement/download/LiDARHD-NUALID/{bloc_ign(X, Y)}/LHD_FXX_{X:04d}_{Y:04d}_PTS_LAMB93_IGN69.copc.laz'
     # (22/11/2026 : sur une machine neuve du cloud, le dossier n'existait pas ; chaque écriture échouait en silence.)
     os.makedirs(dossier, exist_ok=True)
-    tmp = fn + '.part'
+    tmp = fn + f'.{os.getpid()}.part'  # (deux blocs en même temps peuvent demander la même dalle)
     for essai in range(4):
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (relief-hd)'})
