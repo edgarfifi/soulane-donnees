@@ -112,16 +112,32 @@ def main():
     ex0, ey0 = L.min(0) - MARGE
     ex1, ey1 = L.max(0) + MARGE
     xs, ys, zs, cs, ms = [], [], [], [], []
+    illisibles = []
     for X in range(int(ex0 // 1000), int(ex1 // 1000) + 1):
         for Y in range(int(ey0 // 1000) + 1, int(ey1 // 1000) + 2):
             fn = dalle(dossier, X, Y)
             if not fn:
                 continue
+            # Lue par 4 × 4 carrés (22/11/2026) : la dalle 0977_6486 de l'IGN a un morceau illisible (« failed to fill whole
+            # buffer », fichier complet pourtant) ; une seule lecture d'un coup faisait échouer les arbres de 4 tuiles entières.
+            # Un carré illisible est sauté (ses arbres manquent), les autres sont gardés.
+            qx = np.linspace(ex0, ex1, 5); qy = np.linspace(ey0, ey1, 5)
             with laspy.CopcReader.open(fn) as r:
-                p = r.query(Bounds(mins=np.array([ex0, ey0]), maxs=np.array([ex1, ey1])))
-            if len(p):
-                xs.append(np.asarray(p.x)); ys.append(np.asarray(p.y)); zs.append(np.asarray(p.z)); cs.append(np.asarray(p.classification))
-                ms.append(np.asarray(p.number_of_returns) > 1)
+                for a_ in range(4):
+                    for b_ in range(4):
+                        # (bornes demi-ouvertes : un point au bord n'est lu qu'une fois)
+                        x0_, x1_, y0_, y1_ = qx[a_], qx[a_ + 1], qy[b_], qy[b_ + 1]
+                        try:
+                            p = r.query(Bounds(mins=np.array([x0_, y0_]), maxs=np.array([x1_, y1_])))
+                        except Exception as e:
+                            illisibles.append(f'{X}_{Y}:{a_}{b_}')
+                            continue
+                        if not len(p):
+                            continue
+                        px_ = np.asarray(p.x); py_ = np.asarray(p.y)
+                        m_ = (px_ >= x0_) & (py_ >= y0_) & ((px_ < x1_) | (a_ == 3)) & ((py_ < y1_) | (b_ == 3))
+                        xs.append(px_[m_]); ys.append(py_[m_]); zs.append(np.asarray(p.z)[m_]); cs.append(np.asarray(p.classification)[m_])
+                        ms.append((np.asarray(p.number_of_returns) > 1)[m_])
     x = np.concatenate(xs); y = np.concatenate(ys); z = np.concatenate(zs); c = np.concatenate(cs); multi = np.concatenate(ms)
     nx = int((ex1 - ex0) / CELL) + 1
     ny = int((ey1 - ey0) / CELL) + 1
@@ -233,7 +249,7 @@ def main():
     graine = rng.integers(0, 256, len(T), dtype=np.uint8)
     head = {'z': 16, 'x': x16, 'y': y16, 'arbres': int(len(T)), 'epiceas': int((nature == 0).sum()), 'meleze': int((nature == 1).sum()),
             'pins': int((nature == 2).sum()), 'feuillus': int((nature == 3).sum()), 'buissons': int((nature == 4).sum()),
-            'ecartes_suspendus': suspendus, 'ecartes_un_echo': un_echo, 'ecartes_infrarouge': roche, 'infrarouge_manquant': irc_manque,
+            'ecartes_suspendus': suspendus, 'ecartes_un_echo': un_echo, 'ecartes_infrarouge': roche, 'infrarouge_manquant': irc_manque, 'carres_illisibles': illisibles,
             'hauteur_mediane': round(float(np.median(out[:, 3])) if len(T) else 0, 1),
             'secondes': round(time.time() - T0, 1)}
     os.makedirs(sortie, exist_ok=True)
