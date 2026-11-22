@@ -22,8 +22,13 @@ def main():
             t = time.time()
             r = subprocess.run([sys.executable, os.path.join(here, 'bloc.py'), str(x16), str(y16), dalles, travail], capture_output=True, text=True)
             r2 = subprocess.run([sys.executable, os.path.join(here, 'arbres.py'), str(x16), str(y16), dalles, travail], capture_output=True, text=True)
-            last = (r.stdout.strip().splitlines() or [''])[-1][:300]
-            journal.append({'bloc': f'{x16}/{y16}', 'secondes': round(time.time() - t), 'bloc_ok': r.returncode == 0, 'arbres_ok': r2.returncode == 0, 'fin': last,
+            lignes = r.stdout.strip().splitlines()
+            last = (lignes or [''])[-1][:300]
+            # Un bloc sans aucun point n'est PAS réussi (22/11/2026 : dalles refusées au téléchargement, 16 blocs vides
+            # comptés réussis) ; les lignes des dalles ratées sont gardées dans le journal.
+            vide = last.startswith('aucun point')
+            journal.append({'bloc': f'{x16}/{y16}', 'secondes': round(time.time() - t), 'bloc_ok': r.returncode == 0 and not vide, 'arbres_ok': r2.returncode == 0, 'fin': last,
+                            'dalles': [l[:300] for l in lignes if l.startswith('dalle') or l.startswith('DALLE')][:8],
                             'erreur': (r.stderr.strip().splitlines() or [''])[-1][:300] if r.returncode else ''})
             print(json.dumps(journal[-1], ensure_ascii=False), flush=True)
     r = subprocess.run(['node', paquet, 'partiel', travail, sortie, f'{x14}/{y14}'], capture_output=True, text=True)
