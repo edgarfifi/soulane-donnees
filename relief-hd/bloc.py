@@ -61,10 +61,15 @@ def dalle(dossier, X, Y):
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (relief-hd)'})
             with urllib.request.urlopen(req, timeout=600) as r, open(tmp, 'wb') as f:
+                attendu = int(r.headers.get('Content-Length') or 0)
                 while True:
                     b = r.read(1 << 20)
                     if not b: break
                     f.write(b)
+            # Dalle COMPLÈTE seulement (22/11/2026 : une coupure réseau laissait un fichier tronqué, gardé, et le bloc
+            # échouait à la lecture : « failed to fill whole buffer », 12 blocs sur 58 tuiles dans le cloud).
+            if attendu and os.path.getsize(tmp) != attendu:
+                raise IOError(f'dalle tronquée {os.path.getsize(tmp)} / {attendu}')
             if os.path.getsize(tmp) > 10000:
                 os.replace(tmp, fn)
                 return fn
