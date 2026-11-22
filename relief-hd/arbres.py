@@ -17,8 +17,10 @@
 # 4 ter. Écartée aussi (22/11/2026, Edgar : « des sapins dans des endroits incohérents, dans la montagne », Aiguille du
 #    Fruit) : une couronne qui n'est PAS VÉGÉTALE sur la photo infrarouge de l'IGN (ORTHOIMAGERY.ORTHOPHOTOS.IRC, Licence
 #    Ouverte : la végétation y est rouge, la roche, la neige et le bâti cyan ou gris). Indice (PIR − rouge) / (PIR + rouge)
-#    moyen sur le cœur de la couronne, sous SEUIL_IRC. Mesuré le 22/11 : sous l'Aiguille du Fruit, 32 « arbres » sur 36
-#    écartés (tous sur la roche) ; forêt dense de Courchevel 1850, 24 sur 2 751 (bords d'ombre). Photo indisponible : gardé.
+#    moyen sur le cœur de la couronne, sous SEUIL_IRC, ET couronne CLAIRE (luminosité > LUM_IRC sur 255 : dans l'ombre
+#    profonde d'une forêt dense, l'infrarouge ne se lit plus, l'indice y est faux ; premier essai du 22/11 : 16 % d'une
+#    forêt écartés à tort). Mesuré : sous l'Aiguille du Fruit, 29 « arbres » sur 36 écartés (roche claire, médiane 165) ;
+#    forêt dense et sombre du bloc 33958/23464, 41 sur 2 729 (436 sans la condition). Photo indisponible : gardé.
 # 5. Teinte : lue au rendu sur la photo (pas à la fabrication).
 #
 # Sortie : <sortie>/16_<x>_<y>.arb : en-tête JSON (1 ligne) puis, par arbre, x, y (repère de la tuile z12, m vrais),
@@ -39,6 +41,7 @@ TO_WGS = Transformer.from_crs(2154, 4326, always_xy=True)
 CELL = 0.5
 MARGE = 15.0
 SEUIL_IRC = -0.15
+LUM_IRC = 70.0
 Z_IRC = 18  # (~0,42 m par pixel à Courchevel)
 
 
@@ -76,6 +79,7 @@ def indice_vegetation(mx, my, rayon_m, k, dossier):
         return im
 
     out = np.full(len(px), np.nan)
+    lum = np.full(len(px), np.nan)
     for i in range(len(px)):
         rr = max(1, int(round(0.6 * float(rayon_m[i]) / mpp)))
         vals = []
@@ -89,7 +93,8 @@ def indice_vegetation(mx, my, rayon_m, k, dossier):
         if vals:
             v = np.mean(vals, 0)
             out[i] = (v[0] - v[1]) / max(v[0] + v[1], 1.0)  # (photo IRC : rouge = PIR, vert = rouge)
-    return out
+            lum[i] = float(v.mean())
+    return out, lum
 
 
 def main():
@@ -208,9 +213,9 @@ def main():
     roche = 0
     irc_manque = 0
     if len(out) and not os.environ.get('ARBRES_SANS_IRC'):
-        nd = indice_vegetation(mx, my, out[:, 4], k, dossier)
+        nd, lum = indice_vegetation(mx, my, out[:, 4], k, dossier)
         irc_manque = int(np.isnan(nd).sum())
-        pas_vert = nd < SEUIL_IRC
+        pas_vert = (nd < SEUIL_IRC) & (lum > LUM_IRC)
         roche = int(pas_vert.sum())
         out = out[~pas_vert]; T = T[~pas_vert]
     # Nature (reliefMesh.ts : 0 épicéa / sapin, 1 mélèze, 2 pin cembro / à crochets, 3 feuillu, 4 buisson), d'après la
