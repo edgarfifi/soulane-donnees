@@ -54,6 +54,8 @@ def dalle(dossier, X, Y):
     if os.path.exists(fn) and os.path.getsize(fn) > 10000:
         return fn
     url = f'https://data.geopf.fr/telechargement/download/LiDARHD-NUALID/{bloc_ign(X, Y)}/LHD_FXX_{X:04d}_{Y:04d}_PTS_LAMB93_IGN69.copc.laz'
+    # (22/11/2026 : sur une machine neuve du cloud, le dossier n'existait pas ; chaque écriture échouait en silence.)
+    os.makedirs(dossier, exist_ok=True)
     tmp = fn + '.part'
     for essai in range(4):
         try:
