@@ -4,3 +4,4 @@ scikit-image>=0.24
 laspy[lazrs]>=2.5
 pyproj>=3.7
 open3d>=0.19
+pillow>=10

@@ -14,6 +14,11 @@
 #    des creux ») : une couronne SUSPENDUE (presque aucun écho de végétation au milieu de sa hauteur : câbles, fils, rangés
 #    « haute végétation » par le classement de l'IGN) et une couronne à UN SEUL ÉCHO (moins d'un quart de ses points sont des
 #    échos multiples : une surface pleine, rocher ou toit, pas un feuillage que le laser traverse).
+# 4 ter. Écartée aussi (22/11/2026, Edgar : « des sapins dans des endroits incohérents, dans la montagne », Aiguille du
+#    Fruit) : une couronne qui n'est PAS VÉGÉTALE sur la photo infrarouge de l'IGN (ORTHOIMAGERY.ORTHOPHOTOS.IRC, Licence
+#    Ouverte : la végétation y est rouge, la roche, la neige et le bâti cyan ou gris). Indice (PIR − rouge) / (PIR + rouge)
+#    moyen sur le cœur de la couronne, sous SEUIL_IRC. Mesuré le 22/11 : sous l'Aiguille du Fruit, 32 « arbres » sur 36
+#    écartés (tous sur la roche) ; forêt dense de Courchevel 1850, 24 sur 2 751 (bords d'ombre). Photo indisponible : gardé.
 # 5. Teinte : lue au rendu sur la photo (pas à la fabrication).
 #
 # Sortie : <sortie>/16_<x>_<y>.arb : en-tête JSON (1 ligne) puis, par arbre, x, y (repère de la tuile z12, m vrais),
@@ -33,6 +38,58 @@ TO_L93 = Transformer.from_crs(4326, 2154, always_xy=True)
 TO_WGS = Transformer.from_crs(2154, 4326, always_xy=True)
 CELL = 0.5
 MARGE = 15.0
+SEUIL_IRC = -0.15
+Z_IRC = 18  # (~0,42 m par pixel à Courchevel)
+
+
+def indice_vegetation(mx, my, rayon_m, k, dossier):
+    """(PIR − rouge) / (PIR + rouge) de la photo infrarouge de l'IGN sur le cœur de chaque couronne (mercator 0..1) ;
+    NaN là où la photo manque. Tuiles gardées dans <dossier>/irc (partagées entre les blocs)."""
+    import io, urllib.request
+    from PIL import Image
+    os.makedirs(os.path.join(dossier, 'irc'), exist_ok=True)
+    n = 256 * 2 ** Z_IRC
+    px = np.asarray(mx) * n
+    py = np.asarray(my) * n
+    mpp = k / n
+    tuiles = {}
+
+    def tuile(c, r):
+        if (c, r) in tuiles:
+            return tuiles[(c, r)]
+        fn = os.path.join(dossier, 'irc', f'{Z_IRC}_{c}_{r}.jpg')
+        im = None
+        for essai in range(3):
+            try:
+                if not os.path.exists(fn):
+                    u = ('https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS.IRC'
+                         f'&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={Z_IRC}&TILEROW={r}&TILECOL={c}&FORMAT=image/jpeg')
+                    data = urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0 (relief-hd)'}), timeout=30).read()
+                    tmp = fn + f'.{os.getpid()}.part'
+                    open(tmp, 'wb').write(data)
+                    os.replace(tmp, fn)
+                im = np.asarray(Image.open(fn).convert('RGB'), np.float32)
+                break
+            except Exception:
+                time.sleep(2 + 3 * essai)
+        tuiles[(c, r)] = im
+        return im
+
+    out = np.full(len(px), np.nan)
+    for i in range(len(px)):
+        rr = max(1, int(round(0.6 * float(rayon_m[i]) / mpp)))
+        vals = []
+        for yy in range(int(py[i]) - rr, int(py[i]) + rr + 1):
+            for xx in range(int(px[i]) - rr, int(px[i]) + rr + 1):
+                if (xx - px[i]) ** 2 + (yy - py[i]) ** 2 > rr * rr:
+                    continue
+                t = tuile(xx // 256, yy // 256)
+                if t is not None:
+                    vals.append(t[yy % 256, xx % 256])
+        if vals:
+            v = np.mean(vals, 0)
+            out[i] = (v[0] - v[1]) / max(v[0] + v[1], 1.0)  # (photo IRC : rouge = PIR, vert = rouge)
+    return out
 
 
 def main():
@@ -147,6 +204,15 @@ def main():
     out[:, 2] = T[:, 2]
     out[:, 3] = T[:, 3]
     out[:, 4] = T[:, 4]
+    # 4 ter. couronne non végétale sur la photo infrarouge : écartée (photo indisponible : gardée)
+    roche = 0
+    irc_manque = 0
+    if len(out) and not os.environ.get('ARBRES_SANS_IRC'):
+        nd = indice_vegetation(mx, my, out[:, 4], k, dossier)
+        irc_manque = int(np.isnan(nd).sum())
+        pas_vert = nd < SEUIL_IRC
+        roche = int(pas_vert.sum())
+        out = out[~pas_vert]; T = T[~pas_vert]
     # Nature (reliefMesh.ts : 0 épicéa / sapin, 1 mélèze, 2 pin cembro / à crochets, 3 feuillu, 4 buisson), d'après la
     # forme mesurée (rayon de couronne / hauteur) et l'altitude : à Courchevel, presque tout est conifère au-dessus de
     # 1 400 m (épicéa et sapin étroits, mélèze plus large, cembro rond et trapu vers la limite de la forêt) ; feuillus en
@@ -162,7 +228,7 @@ def main():
     graine = rng.integers(0, 256, len(T), dtype=np.uint8)
     head = {'z': 16, 'x': x16, 'y': y16, 'arbres': int(len(T)), 'epiceas': int((nature == 0).sum()), 'meleze': int((nature == 1).sum()),
             'pins': int((nature == 2).sum()), 'feuillus': int((nature == 3).sum()), 'buissons': int((nature == 4).sum()),
-            'ecartes_suspendus': suspendus, 'ecartes_un_echo': un_echo,
+            'ecartes_suspendus': suspendus, 'ecartes_un_echo': un_echo, 'ecartes_infrarouge': roche, 'infrarouge_manquant': irc_manque,
             'hauteur_mediane': round(float(np.median(out[:, 3])) if len(T) else 0, 1),
             'secondes': round(time.time() - T0, 1)}
     os.makedirs(sortie, exist_ok=True)

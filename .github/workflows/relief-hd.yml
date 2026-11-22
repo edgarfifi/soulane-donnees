@@ -10,6 +10,10 @@ on:
         description: "Tuiles du zoom 14 à fabriquer (x/y séparés par des espaces) ; vide = toute la zone de Courchevel"
         type: string
         default: ''
+      arbres_seuls:
+        description: "Seulement les arbres (après une retouche de arbres.py : minutes au lieu d'heures)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -74,7 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           X=${TUILE%/*}; Y=${TUILE#*/}
-          python relief-hd/tuile14.py "$X" "$Y" dalles travail sortie --paquet relief-hd/paquet-build.mjs
+          python relief-hd/tuile14.py "$X" "$Y" dalles travail sortie --paquet relief-hd/paquet-build.mjs ${{ inputs.arbres_seuls && '--arbres-seuls' || '' }}
           ls -la sortie | head -50
 
       - name: Résultats
