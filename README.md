@@ -134,3 +134,14 @@ l'emprise.
 Les fichiers de ce dépôt sont tenus dans le dépôt de l'app Soulane (`scripts/soulane-donnees/`) ; `outils/pistes.mjs`,
 `outils/skirando.mjs`, `outils/sentiers.mjs`, `outils/skitour.mjs`, `outils/transports.mjs` et `outils/clpa.mjs` y sont générés à partir du code de l'app : ne pas les
 modifier ici.
+
+## Relief HD : maillages 3D du LiDAR HD (outil de fabrication)
+
+Outil seulement (aucune donnée publiée ici) : [`relief-hd/`](relief-hd/) et
+[`.github/workflows/relief-hd.yml`](.github/workflows/relief-hd.yml), lancé à la main. Il tire du nuage de points classé
+du [LiDAR HD de l'IGN](https://geoservices.ign.fr/lidarhd) la surface 3D du sol et de la roche (reconstruction de Poisson,
+normales orientées vers le capteur, pyramide de niveaux de détail compressée par meshoptimizer) et les arbres (hauteur et
+couronne de chacun), pour le « Relief HD » de l'app [Soulane](https://soulane.app).
+
+- **Source et licence** : LiDAR HD © IGN, [Licence Ouverte 2.0](https://www.etalab.gouv.fr/licence-ouverte-open-licence/)
+  (mention : « IGN LiDAR HD »).

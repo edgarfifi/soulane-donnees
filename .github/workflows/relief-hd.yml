@@ -1,0 +1,80 @@
+name: Relief HD (fabrication des maillages 3D)
+
+# Relief HD de Soulane : surface 3D (sol, roche, parois) et arbres tirés du nuage de points du LiDAR HD de l'IGN
+# (Licence Ouverte 2.0), une tuile du zoom 14 par travail. Lancé à la main seulement ; les résultats (nœuds de maillage
+# compressés, arbres) partent en artefacts, assemblés et mis en ligne ensuite depuis le poste de Soulane.
+on:
+  workflow_dispatch:
+    inputs:
+      tuiles:
+        description: "Tuiles du zoom 14 à fabriquer (x/y séparés par des espaces) ; vide = toute la zone de Courchevel"
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  liste:
+    runs-on: ubuntu-latest
+    outputs:
+      tuiles: ${{ steps.l.outputs.tuiles }}
+    steps:
+      - id: l
+        env:
+          TUILES: ${{ inputs.tuiles }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          t = os.environ.get('TUILES', '').split()
+          if not t:
+              # Courchevel : tuiles z12 x 2122 à 2124, y 1466 à 1467 → z14 x 8488 à 8499, y 5864 à 5871
+              t = [f'{x}/{y}' for y in range(5864, 5872) for x in range(8488, 8500)]
+          print('tuiles=' + json.dumps(t))
+          PY
+
+  fabrique:
+    needs: liste
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        tuile: ${{ fromJson(needs.liste.outputs.tuiles) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: relief-hd/requirements.txt
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Outils
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libgl1 libgomp1 > /dev/null
+          pip install -r relief-hd/requirements.txt
+
+      - name: Fabriquer la tuile ${{ matrix.tuile }}
+        env:
+          TUILE: ${{ matrix.tuile }}
+        run: |
+          set -euo pipefail
+          X=${TUILE%/*}; Y=${TUILE#*/}
+          python relief-hd/tuile14.py "$X" "$Y" dalles travail sortie --paquet relief-hd/paquet-build.mjs
+          ls -la sortie | head -50
+
+      - name: Résultats
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: relief-${{ strategy.job-index }}
+          path: sortie/
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: warn
