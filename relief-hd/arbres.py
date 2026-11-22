@@ -21,6 +21,9 @@
 #    profonde d'une forêt dense, l'infrarouge ne se lit plus, l'indice y est faux ; premier essai du 22/11 : 16 % d'une
 #    forêt écartés à tort). Mesuré : sous l'Aiguille du Fruit, 29 « arbres » sur 36 écartés (roche claire, médiane 165) ;
 #    forêt dense et sombre du bloc 33958/23464, 41 sur 2 729 (436 sans la condition). Photo indisponible : gardé.
+# 4 quater. Écartés enfin (22/11 au soir) : les PETITS câbles (moins de 8 échos, tous dans le quart du haut), une couronne
+#    à moins de 35 % d'échos multiples (dès 8 échos), et un sommet sur une PAROI (sol de plus de 50°). Bloc d'une paroi sous
+#    l'Aiguille du Fruit : 29 → 0 ; bloc des remontées de la Saulire : 64 → 4 ; forêt dense : 3 430 → 3 416.
 # 5. Teinte : lue au rendu sur la photo (pas à la fabrication).
 #
 # Sortie : <sortie>/16_<x>_<y>.arb : en-tête JSON (1 ligne) puis, par arbre, x, y (repère de la tuile z12, m vrais),
@@ -41,6 +44,7 @@ TO_WGS = Transformer.from_crs(2154, 4326, always_xy=True)
 CELL = 0.5
 MARGE = 15.0
 SEUIL_IRC = -0.15
+PENTE_MAX = 50.0
 LUM_IRC = 70.0
 Z_IRC = 18  # (~0,42 m par pixel à Courchevel)
 
@@ -192,19 +196,35 @@ def main():
     # (milieu de la couronne : de 0,35 à 0,75 × la hauteur ; sous un câble à 37 m, les arbres de 5 m n'y sont pas)
     hl = hag[vv] / np.maximum(hs[L], 0.1)
     nmil = np.bincount(L, weights=(hl > 0.35) & (hl < 0.75), minlength=len(seeds) + 1)
+    nbas = np.bincount(L, weights=hl < 0.75, minlength=len(seeds) + 1)
+    # pente du sol (degrés) sous chaque case, sur le sol lissé (~2 m)
+    solL = ndimage.gaussian_filter(sol, 4.0)
+    gy_, gx_ = np.gradient(solL, CELL)
+    pente = np.degrees(np.arctan(np.hypot(gx_, gy_)))
+    dbg = []  # (ARBRES_DEBUG=1 : chaque sommet, ses mesures et sa décision, dans 16_x_y.debug.npy)
     suspendus = 0
+    paroi = 0
     un_echo = 0
     ecartes = []  # (contrôle : ARBRES_ECARTES=1 les écrit à côté, en Lambert 93)
     trees = []
     for i, (r_, c_) in enumerate(seeds):
         h = float(chm[r_, c_])
-        if h >= 4 and nb[i + 1] >= 8 and nmil[i + 1] < max(3, 0.03 * nb[i + 1]):
+        dbg.append((ex0 + (c_ + 0.5) * CELL, ey0 + (r_ + 0.5) * CELL, h, nb[i + 1], nbm[i + 1], nmil[i + 1], nbas[i + 1], pente[r_, c_]))
+        # (suspendu aussi : un PETIT câble, téléski — moins de 8 échos, tous dans le quart du haut ; 22/11 au soir, Edgar :
+        # « toujours des sapins aux endroits à câbles »)
+        if (h >= 4 and nb[i + 1] >= 8 and nmil[i + 1] < max(3, 0.03 * nb[i + 1])) or (h >= 3 and nb[i + 1] < 8 and nbas[i + 1] == 0):
             suspendus += 1
             ecartes.append(('suspendu', ex0 + (c_ + 0.5) * CELL, ey0 + (r_ + 0.5) * CELL, h, int(nb[i + 1])))
             continue
-        if nb[i + 1] >= 20 and nbm[i + 1] < 0.25 * nb[i + 1]:
+        if nb[i + 1] >= 8 and nbm[i + 1] < 0.35 * nb[i + 1]:
             un_echo += 1
             ecartes.append(('un_echo', ex0 + (c_ + 0.5) * CELL, ey0 + (r_ + 0.5) * CELL, h, float(nbm[i + 1] / nb[i + 1])))
+            continue
+        # PAROI (22/11 au soir, Edgar : « toujours des arbres sur les parois, ça n'a aucun sens ») : sol de plus de 50° sous le
+        # sommet. Mesuré : sapins d'une paroi sous l'Aiguille du Fruit, pente médiane 76° ; forêt dense, 99 % sous 41°.
+        if pente[r_, c_] > PENTE_MAX:
+            paroi += 1
+            ecartes.append(('paroi', ex0 + (c_ + 0.5) * CELL, ey0 + (r_ + 0.5) * CELL, h, float(pente[r_, c_])))
             continue
         rad = math.sqrt(max(area[i], 0.25) / math.pi)
         rad = min(rad, 0.55 * h + 0.5)
@@ -249,10 +269,12 @@ def main():
     graine = rng.integers(0, 256, len(T), dtype=np.uint8)
     head = {'z': 16, 'x': x16, 'y': y16, 'arbres': int(len(T)), 'epiceas': int((nature == 0).sum()), 'meleze': int((nature == 1).sum()),
             'pins': int((nature == 2).sum()), 'feuillus': int((nature == 3).sum()), 'buissons': int((nature == 4).sum()),
-            'ecartes_suspendus': suspendus, 'ecartes_un_echo': un_echo, 'ecartes_infrarouge': roche, 'infrarouge_manquant': irc_manque, 'carres_illisibles': illisibles,
+            'ecartes_suspendus': suspendus, 'ecartes_un_echo': un_echo, 'ecartes_paroi': paroi, 'ecartes_infrarouge': roche, 'infrarouge_manquant': irc_manque, 'carres_illisibles': illisibles,
             'hauteur_mediane': round(float(np.median(out[:, 3])) if len(T) else 0, 1),
             'secondes': round(time.time() - T0, 1)}
     os.makedirs(sortie, exist_ok=True)
+    if os.environ.get('ARBRES_DEBUG'):
+        np.save(os.path.join(sortie, f'16_{x16}_{y16}.debug.npy'), np.array(dbg, np.float64))
     with open(os.path.join(sortie, f'16_{x16}_{y16}.arb'), 'wb') as f:
         f.write((json.dumps(head) + '\n').encode())
         f.write(out.tobytes()); f.write(nature.tobytes()); f.write(graine.tobytes())
