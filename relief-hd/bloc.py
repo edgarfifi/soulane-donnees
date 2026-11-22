@@ -267,6 +267,7 @@ def main():
 
     BV, BT, BM = batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz)
     n_bat_v = len(BV)
+    n_tri_sol = len(mesh.triangles)  # (triangles du sol ; ceux des bâtiments suivent)
     if n_bat_v:
         nv0 = len(mesh.vertices)
         mesh.vertices = o3d.utility.Vector3dVector(np.r_[np.asarray(mesh.vertices), BV])
@@ -330,15 +331,19 @@ def main():
     cx0, cx1 = (bx0 - mx0) * k, (bx1 - mx0) * k
     cy1, cy0 = (my0 - by0) * k, (my0 - by1) * k
     inside = (cen[:, 0] >= cx0) & (cen[:, 0] < cx1) & (cen[:, 1] >= cy0) & (cen[:, 1] < cy1)
+    is_bat = np.arange(len(T)) >= n_tri_sol
     T = T[inside]
-    # petits morceaux isolés (moins de 200 triangles) : écartés
+    is_bat = is_bat[inside]
+    # petits morceaux isolés (moins de 200 triangles) : écartés, SAUF les bâtiments (22/11/2026 : chaque pan de mur, quatre
+    # sommets à lui pour une normale plate, est un morceau de 2 triangles : TOUS les murs étaient jetés ici, il ne restait
+    # que des toits flottants)
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
     e = np.r_[T[:, [0, 1]], T[:, [1, 2]]]
     ncomp, lab = connected_components(coo_matrix((np.ones(len(e), np.int8), (e[:, 0], e[:, 1])), shape=(nv, nv)), directed=False)
     tl = lab[T[:, 0]]
     cnt = np.bincount(tl, minlength=ncomp)
-    T = T[cnt[tl] >= 200]
+    T = T[(cnt[tl] >= 200) | is_bat]
     used = np.unique(T)
     remap = np.full(nv, -1, np.int64); remap[used] = np.arange(len(used))
     T = remap[T].astype(np.uint32)
