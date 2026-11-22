@@ -10,6 +10,10 @@
 #    couronne.
 # 4. Nature : d'après la forme de la couronne et l'altitude (cf. plus bas) ; buisson sous 3 m.
 #    (Limite honnête : sous ~2 m, le LiDAR dit « quelque chose de cette taille », pas quelle plante.)
+# 4 bis. Écartés (22/11/2026, Edgar : « une rangée de sapins au niveau du câble du téléphérique », « des petits sapins dans
+#    des creux ») : une couronne SUSPENDUE (presque aucun écho de végétation au milieu de sa hauteur : câbles, fils, rangés
+#    « haute végétation » par le classement de l'IGN) et une couronne à UN SEUL ÉCHO (moins d'un quart de ses points sont des
+#    échos multiples : une surface pleine, rocher ou toit, pas un feuillage que le laser traverse).
 # 5. Teinte : lue au rendu sur la photo (pas à la fabrication).
 #
 # Sortie : <sortie>/16_<x>_<y>.arb : en-tête JSON (1 ligne) puis, par arbre, x, y (repère de la tuile z12, m vrais),
@@ -45,7 +49,7 @@ def main():
     L = np.array([TO_L93.transform(lo, la) for lo, la in corners])
     ex0, ey0 = L.min(0) - MARGE
     ex1, ey1 = L.max(0) + MARGE
-    xs, ys, zs, cs = [], [], [], []
+    xs, ys, zs, cs, ms = [], [], [], [], []
     for X in range(int(ex0 // 1000), int(ex1 // 1000) + 1):
         for Y in range(int(ey0 // 1000) + 1, int(ey1 // 1000) + 2):
             fn = dalle(dossier, X, Y)
@@ -55,7 +59,8 @@ def main():
                 p = r.query(Bounds(mins=np.array([ex0, ey0]), maxs=np.array([ex1, ey1])))
             if len(p):
                 xs.append(np.asarray(p.x)); ys.append(np.asarray(p.y)); zs.append(np.asarray(p.z)); cs.append(np.asarray(p.classification))
-    x = np.concatenate(xs); y = np.concatenate(ys); z = np.concatenate(zs); c = np.concatenate(cs)
+                ms.append(np.asarray(p.number_of_returns) > 1)
+    x = np.concatenate(xs); y = np.concatenate(ys); z = np.concatenate(zs); c = np.concatenate(cs); multi = np.concatenate(ms)
     nx = int((ex1 - ex0) / CELL) + 1
     ny = int((ey1 - ey0) / CELL) + 1
     ix = ((x - ex0) / CELL).astype(int).clip(0, nx - 1)
@@ -99,9 +104,30 @@ def main():
     # par arbre : surface de la couronne, base
     idx = np.arange(1, len(seeds) + 1)
     area = ndimage.sum_labels(np.ones_like(chm), lab, idx) * CELL * CELL
+    # échos de végétation de chaque couronne (au-dessus de 1,5 m) : combien, dont multiples, dont dans la moitié basse
+    hs = np.r_[0.0, chm[seeds[:, 0], seeds[:, 1]]] if len(seeds) else np.zeros(1)
+    hag = z - sol[iy, ix]
+    vv = v & (hag > 1.5)
+    L = lab[iy[vv], ix[vv]]
+    nb = np.bincount(L, minlength=len(seeds) + 1)
+    nbm = np.bincount(L, weights=multi[vv], minlength=len(seeds) + 1)
+    # (milieu de la couronne : de 0,35 à 0,75 × la hauteur ; sous un câble à 37 m, les arbres de 5 m n'y sont pas)
+    hl = hag[vv] / np.maximum(hs[L], 0.1)
+    nmil = np.bincount(L, weights=(hl > 0.35) & (hl < 0.75), minlength=len(seeds) + 1)
+    suspendus = 0
+    un_echo = 0
+    ecartes = []  # (contrôle : ARBRES_ECARTES=1 les écrit à côté, en Lambert 93)
     trees = []
     for i, (r_, c_) in enumerate(seeds):
         h = float(chm[r_, c_])
+        if h >= 4 and nb[i + 1] >= 8 and nmil[i + 1] < max(3, 0.03 * nb[i + 1]):
+            suspendus += 1
+            ecartes.append(('suspendu', ex0 + (c_ + 0.5) * CELL, ey0 + (r_ + 0.5) * CELL, h, int(nb[i + 1])))
+            continue
+        if nb[i + 1] >= 20 and nbm[i + 1] < 0.25 * nb[i + 1]:
+            un_echo += 1
+            ecartes.append(('un_echo', ex0 + (c_ + 0.5) * CELL, ey0 + (r_ + 0.5) * CELL, h, float(nbm[i + 1] / nb[i + 1])))
+            continue
         rad = math.sqrt(max(area[i], 0.25) / math.pi)
         rad = min(rad, 0.55 * h + 0.5)
         X = ex0 + (c_ + 0.5) * CELL
@@ -136,12 +162,16 @@ def main():
     graine = rng.integers(0, 256, len(T), dtype=np.uint8)
     head = {'z': 16, 'x': x16, 'y': y16, 'arbres': int(len(T)), 'epiceas': int((nature == 0).sum()), 'meleze': int((nature == 1).sum()),
             'pins': int((nature == 2).sum()), 'feuillus': int((nature == 3).sum()), 'buissons': int((nature == 4).sum()),
+            'ecartes_suspendus': suspendus, 'ecartes_un_echo': un_echo,
             'hauteur_mediane': round(float(np.median(out[:, 3])) if len(T) else 0, 1),
             'secondes': round(time.time() - T0, 1)}
     os.makedirs(sortie, exist_ok=True)
     with open(os.path.join(sortie, f'16_{x16}_{y16}.arb'), 'wb') as f:
         f.write((json.dumps(head) + '\n').encode())
         f.write(out.tobytes()); f.write(nature.tobytes()); f.write(graine.tobytes())
+    if os.environ.get('ARBRES_ECARTES'):
+        with open(os.path.join(sortie, f'16_{x16}_{y16}.ecartes.json'), 'w') as f:
+            json.dump(ecartes, f)
     print(json.dumps(head), flush=True)
 
 

@@ -1583,7 +1583,29 @@ function readBlock(file) {
   const ao = new Uint8Array(take(n));
   const can = (head.version ?? 1) >= 2 ? new Uint8Array(take(n)) : new Uint8Array(n);
   const tri = new Uint32Array(take(m * 12));
-  return { v: { pos, nrm, ao, can }, tri };
+  return { v: { pos, nrm, ao, can }, tri: dropAbsurd(pos, tri, file) };
+}
+var Z_MIN = -500;
+var Z_MAX = 6e3;
+function dropAbsurd(pos, tri, file) {
+  const ok = (i) => {
+    const z = pos[i * 3 + 2];
+    return z >= Z_MIN && z <= Z_MAX && Number.isFinite(pos[i * 3]) && Number.isFinite(pos[i * 3 + 1]);
+  };
+  let bad = 0;
+  for (let t = 0; t < tri.length; t += 3) if (!ok(tri[t]) || !ok(tri[t + 1]) || !ok(tri[t + 2])) bad++;
+  if (!bad) return tri;
+  const out = new Uint32Array(tri.length - bad * 3);
+  let o = 0;
+  for (let t = 0; t < tri.length; t += 3) {
+    if (!ok(tri[t]) || !ok(tri[t + 1]) || !ok(tri[t + 2])) continue;
+    out[o++] = tri[t];
+    out[o++] = tri[t + 1];
+    out[o++] = tri[t + 2];
+  }
+  process.stdout.write(`  ${file} : ${bad} triangles \xE0 une altitude impossible \xE9cart\xE9s
+`);
+  return out;
 }
 function splitLeaves(v, tri, r) {
   const [x0, y0, x1, y1] = r;

@@ -44,6 +44,14 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz):
         m = lab == k
         if m.sum() < 32:  # < 8 m²
             continue
+        # Cases du bâtiment SANS mesure du toit (grand toit sans écho, cour bouchée par fill_holes) : la hauteur médiane du
+        # toit mesuré (22/11/2026 : elles valaient −1e9 ; ces sommets tiraient des murs vers l'abîme et la boîte d'un nœud
+        # sur 1 000 000 km aplatissait toute sa tuile en plateau à l'altitude de son plus haut point).
+        mesure = m & (t > -1e8)
+        if not mesure.any():
+            continue
+        fill = float(np.median(t[mesure]))
+        tk = np.where(mesure, t, np.where(m, fill, -1e9))
         cs = find_contours(np.pad(m, 1).astype(float), 0.5)
         if not cs:
             continue
@@ -60,11 +68,9 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz):
         # hauteur du toit aux sommets du contour : la plus haute des cases du bâtiment à moins d'une case
         rr = np.clip(np.round(poly[:, 0]).astype(int), 0, ny - 1)
         cc = np.clip(np.round(poly[:, 1]).astype(int), 0, nx - 1)
-        tm = np.where(m, t, -1e9)
-        tmax = ndimage.maximum_filter(tm, size=3)
+        tmax = ndimage.maximum_filter(tk, size=3)
         zt = tmax[rr, cc]
-        if (zt < -1e8).any():
-            zt = np.where(zt < -1e8, np.nanmax(t[m]), zt)
+        zt = np.where(zt < -1e8, fill, zt)
         zg = sol_z(px, py) - 0.5
         zg = np.minimum(zg, zt - 1.0)
         # murs : un quadrilatère par côté, sommets propres (normales plates)
@@ -84,7 +90,7 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz):
         polyxy = np.c_[px, py]
         inside = points_in_poly(ip, polyxy)
         ip = ip[inside]
-        iz = t[rI[inside], cI[inside]]
+        iz = tk[rI[inside], cI[inside]]
         P2 = np.r_[np.c_[px, py], ip]
         Z2 = np.r_[zt, iz]
         if len(P2) < 3:
