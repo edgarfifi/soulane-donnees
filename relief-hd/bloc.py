@@ -99,6 +99,97 @@ def lire(dossier, x0, y0, x1, y1):
     return {k: np.concatenate(v) for k, v in cols.items()}
 
 
+def caps(d):
+    """Cap (vecteur unitaire du déplacement de l'avion, x vers l'est, y vers le nord) de chaque ligne de vol (point_source_id)
+    d'au moins 1 000 points : régression de la position sur l'heure GPS."""
+    head = {}
+    x, y = d['x'], d['y']
+    for s in np.unique(d['ps']):
+        m = d['ps'] == s
+        if m.sum() < 1000: continue
+        t = d['gt'][m] - d['gt'][m].mean()
+        if np.ptp(t) <= 0: continue
+        vx = np.polyfit(t, x[m], 1)[0]; vy = np.polyfit(t, y[m], 1)[0]; n = math.hypot(vx, vy)
+        if n > 0: head[int(s)] = (vx / n, vy / n)
+    return head
+
+
+def vers_capteur(ang, ps, head):
+    """Direction (unitaire) de chaque point vers le CAPTEUR : le capteur est du côté opposé à l'angle de visée (LAS : angle
+    > 0 à droite de l'avion). Ligne de vol inconnue : verticale. Sert aux normales de la surface et, pour les bâtiments,
+    aux rayons LIBRES (entre le point et l'avion, rien de solide : batiments.py, controle_batiments.py)."""
+    S = np.zeros((len(ang), 3)); S[:, 2] = 1
+    for s, (fx, fy) in head.items():
+        m = ps == s; a = np.radians(ang[m]); rx, ry = fy, -fx
+        S[m, 0] = -np.sin(a) * rx; S[m, 1] = -np.sin(a) * ry; S[m, 2] = np.cos(a)
+    return S
+
+
+def toits_semes(x, y, z, c, d, head, ex0, ey0, ex1, ey1, ox, oy, oz, pas=0.3, murs=False):
+    """Surface unique, toits posés (BATI_POISSON=2) : toits à pans de batiments.py (version 5, avec ses replis), semés de
+    points tous les ~pas m (normale du pan, vers le haut). Rend (points semés (repère local), normales, masque des points
+    scène des toits pour le lancer de rayons), ou None sans bâtiment."""
+    import batiments as bt
+    from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+    g = c == 2
+    gs = np.c_[x[g] - ox, y[g] - oy, z[g] - oz][:: max(1, int(g.sum()) // 300000)]
+    fl = LinearNDInterpolator(gs[:, :2], gs[:, 2])
+
+    def sol_z(X, Y):
+        zz = fl(X - ox, Y - oy)
+        bad = ~np.isfinite(zz)
+        if bad.any():
+            zz[bad] = NearestNDInterpolator(gs[:, :2], gs[:, 2])(X[bad] - ox, Y[bad] - oy)
+        return zz + oz
+
+    st = {}
+    V, T, M = bt.batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=st,
+                           capteur=vers_capteur(d['ang'], d['ps'], head))
+    if not len(T):
+        return None
+    Kt = st['types_triangles']
+    TT = T[Kt == bt.TOIT]
+    if murs:
+        # (BATI_POISSON=3 : murs, rives, sous-faces, dessous semés aussi, plus clair : un point tous les ~0,5 m ; bloc.py
+        # n'en garde que là où aucun point mesuré n'est à moins de 0,7 m, ils ne font que guider la surface)
+        TT = np.r_[TT, T[Kt != bt.TOIT]]
+    est_toit = np.r_[np.ones(int((Kt == bt.TOIT).sum()), bool), np.zeros(len(TT) - int((Kt == bt.TOIT).sum()), bool)]
+    a, b, cc = V[TT[:, 0]], V[TT[:, 1]], V[TT[:, 2]]
+    n = np.cross(b - a, cc - a)
+    ar = 0.5 * np.linalg.norm(n, axis=1)
+    ok = ar > 1e-6
+    TT, a, b, cc, n, ar, est_toit = TT[ok], a[ok], b[ok], cc[ok], n[ok], ar[ok], est_toit[ok]
+    n = n / (2 * ar)[:, None]
+    n[est_toit & (n[:, 2] < 0)] *= -1
+    k = np.maximum(1, np.round(ar / np.where(est_toit, pas * pas, 0.25)).astype(int))
+    ti = np.repeat(np.arange(len(TT)), k)
+    rng = np.random.default_rng(1)
+    r1, r2 = rng.random(len(ti)), rng.random(len(ti))
+    f = r1 + r2 > 1
+    r1[f], r2[f] = 1 - r1[f], 1 - r2[f]
+    R = a[ti] + (b[ti] - a[ti]) * r1[:, None] + (cc[ti] - a[ti]) * r2[:, None]
+    RN = n[ti]
+    if murs:
+        # murs guidés : jamais là où des rayons du laser sont passés (contrôle des rideaux : un mur de batiments.py descendu
+        # dans un vide vu par le LiDAR ne guide pas la surface)
+        import controle_batiments as cb
+        lab, _, top = cb.emprises(x, y, z, c, ex0, ey0, ex1, ey1)
+        PL, DL, _ = cb.rayons_libres(x, y, z, c, vers_capteur(d['ang'], d['ps'], head), lab, ex0, ey0, ox, oy, oz, top)
+        _, pas_, _, _ = cb.rideaux(V, T, M, PL, DL)
+        if len(pas_):
+            dpas, _ = cKDTree(pas_).query(R, k=1, distance_upper_bound=1.5, workers=-1)
+            vide = np.isfinite(dpas) & ~est_toit[ti]
+            R, RN, ti = R[~vide], RN[~vide], ti[~vide]
+        R = np.c_[R, est_toit[ti]]  # (4e colonne : point du toit, pour le tri de bloc.py)
+    # scène des toits : bloc.py y lit, à la verticale de chaque point gardé, la hauteur du toit posé
+    sc = o3d.t.geometry.RaycastingScene()
+    m = o3d.t.geometry.TriangleMesh()
+    m.vertex.positions = o3d.core.Tensor(V.astype(np.float32))
+    m.triangle.indices = o3d.core.Tensor(TT.astype(np.int32))
+    sc.add_triangles(m)
+    return R, RN, sc
+
+
 def boucles_de_bord(T):
     """Boucles de bord d'un maillage (triangles T) : arêtes ORIENTÉES (sens de leur triangle) dont l'arête opposée n'existe
     pas, enchaînées en boucles SIMPLES. Un sommet de degré 4 (deux trous qui se touchent en un point, boucle en huit) a
@@ -217,19 +308,19 @@ def main():
     dd, _ = tg.query(np.c_[x[u], y[u], z[u]], k=1, distance_upper_bound=2.0, workers=-1)
     keep = g.copy(); iu = np.nonzero(u)[0]; keep[iu[np.isfinite(dd)]] = True
     # 2. caps des lignes de vol
-    head = {}
-    for s in np.unique(d['ps']):
-        m = d['ps'] == s
-        if m.sum() < 1000: continue
-        t = d['gt'][m] - d['gt'][m].mean()
-        if np.ptp(t) <= 0: continue
-        vx = np.polyfit(t, x[m], 1)[0]; vy = np.polyfit(t, y[m], 1)[0]; n = math.hypot(vx, vy)
-        if n > 0: head[int(s)] = (vx / n, vy / n)
+    head = caps(d)
     # Eau (classe 9) : surface des lacs, gardée comme le sol.
     keep |= c == 9
     # ESSAI (BATI_POISSON=1, 22/11/2026, Edgar : « comment Relief Maps a ses bâtiments en relief sans paroi verticale ? ») :
     # les points des bâtiments (classe 6) reconstruits AVEC le sol, comme la roche, au lieu des murs extrudés de batiments.py.
-    bati_poisson = os.environ.get('BATI_POISSON') == '1'
+    # BATI_POISSON=2 (« surface unique, toits posés », 23/11/2026, Edgar devant Relief Maps : « la surface est bien
+    # comprise et il n'y a rien en dessous de la gare… peut-être un mix où tu arrives à poser les toits ») : même surface
+    # unique, mais les points du TOIT sont remplacés par des points semés sur les toits à pans de batiments.py (faîtages et
+    # pans nets) ; façades, dessous, sol : les points mesurés. Une seule règle partout, pas de mur extrudé.
+    # Depuis le 23/11/2026 (validé par Edgar) : le MIX (3 : surface unique, toit des points mesurés, murs de batiments.py
+    # semés là où la façade n'a pas été vue) par défaut ; BATI_POISSON=0 : murs extrudés de batiments.py seuls.
+    bati_mode = os.environ.get('BATI_POISSON', '3')
+    bati_poisson = bati_mode in ('1', '2', '3')
     if bati_poisson:
         keep |= c == 6
     # ESSAI (ARBRES_MAILLAGE=1, 22/11/2026, Edgar : « faire exactement comme Relief Maps ») : la végétation moyenne et haute
@@ -240,6 +331,7 @@ def main():
     ox, oy, oz = (ex0 + ex1) / 2, (ey0 + ey1) / 2, float(np.median(z[keep]))
     P = np.c_[x[keep] - ox, y[keep] - oy, z[keep] - oz]
     ang, ps = d['ang'][keep], d['ps'][keep]
+    Psol = P[c[keep] == 2]  # (sol mesuré, repère local : sol_z des bâtiments)
     # SOL INTERPOLÉ là où aucun point dur n'existe à moins de 1,5 m (sous les bâtiments, une canopée très dense, un lac
     # sans écho) : sans lui, la surface y était trouée (contrôle du 22/11 : 1 500 m de bords de trous dans un bloc de
     # Courchevel 1850). Grille de 1 m, altitude interpolée sur les points du sol ; normales verticales.
@@ -261,16 +353,44 @@ def main():
             P = np.r_[P, F]
             ang = np.r_[ang, np.zeros(n_fill)]
             ps = np.r_[ps, np.full(n_fill, np.iinfo(ps.dtype).max, dtype=ps.dtype)]
+    toits_poses = None
+    if bati_mode in ('2', '3'):
+        toits_poses = toits_semes(x, y, z, c, d, head, ex0, ey0, ex1, ey1, ox, oy, oz, murs=bati_mode == '3')
+        if toits_poses is not None and bati_mode == '3':
+            R4, RN4, scn = toits_poses
+            # points de guidage des murs : seulement là où rien n'a été mesuré à moins de 0,7 m
+            dd3, _ = cKDTree(P).query(R4[:, :3], k=1, distance_upper_bound=0.7, workers=-1)
+            # (Edgar, 23/11 au soir : « la surface unique gère mieux le toit que le mix ; le mix a une meilleure façade » :
+            # le toit reste celui des points mesurés ; seuls les murs guident)
+            g3 = (R4[:, 3] < 0.5) & ~np.isfinite(dd3)
+            toits_poses = (R4[g3, :3], RN4[g3], scn)
+        if toits_poses is not None and bati_mode == '2':
+            # points mesurés du toit retirés (classe 6 de 0,8 m sous le toit posé à 3 m au-dessus : cheminées, neige) : le
+            # toit posé les remplace ; façades, dessous et sol gardés
+            nk = int(keep.sum())
+            c6 = np.nonzero(c[keep] == 6)[0]
+            Q = P[c6]
+            r = toits_poses[2].cast_rays(o3d.core.Tensor(np.c_[Q[:, 0], Q[:, 1], Q[:, 2] + 50,
+                                                                  np.zeros(len(Q)), np.zeros(len(Q)), -np.ones(len(Q))].astype(np.float32)))
+            th = r['t_hit'].numpy()
+            dz = Q[:, 2] - (Q[:, 2] + 50 - th)
+            garde = np.ones(len(P), bool)
+            garde[c6[np.isfinite(th) & (dz > -0.8) & (dz < 3.0)]] = False
+            assert len(P) >= nk
+            P, ang, ps = P[garde], ang[garde], ps[garde]
+            if n_fill:
+                n_fill = int(garde[-n_fill:].sum())
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     pc.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=1.2, max_nn=24))
     N = np.asarray(pc.normals)
     if n_fill:
         N[-n_fill:] = (0, 0, 1)
-    S = np.zeros_like(N); S[:, 2] = 1
-    for s, (fx, fy) in head.items():
-        m = ps == s; a = np.radians(ang[m]); rx, ry = fy, -fx
-        S[m, 0] = -np.sin(a) * rx; S[m, 1] = -np.sin(a) * ry; S[m, 2] = np.cos(a)
+    S = vers_capteur(ang, ps, head)
     N[(N * S).sum(1) < 0] *= -1
+    if toits_poses is not None and len(toits_poses[0]):
+        P = np.r_[P, toits_poses[0]]
+        N = np.r_[N, toits_poses[1]]
+        pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P))
     pc.normals = o3d.utility.Vector3dVector(N)
     chrono['normales'] = time.time() - T0
     # 3. Poisson : bloc raide (plus de 4 % des points sur des faces de plus de ~37°) → profondeur 11, sinon 10
@@ -299,7 +419,7 @@ def main():
     # interpolé). Leurs murs sont marqués (canopée = 253) : le moteur les teinte en neutre.
     from scipy.interpolate import LinearNDInterpolator as _LI
     from batiments import batiments
-    gsrc = P[: len(c[keep])][c[keep] == 2]  # (P : points gardés, puis points ajoutés ; c[keep] couvre les premiers)
+    gsrc = Psol
     gsrc = gsrc[:: max(1, len(gsrc) // 300000)]
     _f = _LI(gsrc[:, :2], gsrc[:, 2])
 
@@ -311,10 +431,24 @@ def main():
             zz[bad] = NearestNDInterpolator(gsrc[:, :2], gsrc[:, 2])(X[bad] - ox, Y[bad] - oy)
         return zz + oz
 
+    bati_stats = {}
+    bati_ctrl = None
     if bati_poisson:
         BV, BT, BM = np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros(0, bool)
+        head_extra = {'batiments': {'mode': {'1': 'surface unique', '2': 'surface unique, toits posés',
+                                             '3': 'surface unique, murs guidés (mix)'}[bati_mode]}}
     else:
-        BV, BT, BM = batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz)
+        # (version 5, 23/11/2026 : direction de chaque point vers l'avion : dessous mesurés des plateformes et des gares,
+        # contrôles automatiques de chaque bâtiment, replis sur une forme sûre)
+        capteur = vers_capteur(d['ang'], d['ps'], head)
+        tb = time.time()
+        BV, BT, BM = batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=bati_stats, capteur=capteur)
+        chrono['duree_batiments'] = time.time() - tb
+        # contrôles de tout le bloc (controle_batiments.py) : résumé dans l'en-tête, détail dans le rapport
+        import controle_batiments as cbat
+        tb = time.time()
+        bati_ctrl = cbat.controle(BV, BT, BM, x, y, z, c, capteur, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz)
+        chrono['duree_controle_batiments'] = time.time() - tb
     n_bat_v = len(BV)
     n_tri_sol = len(mesh.triangles)  # (triangles du sol ; ceux des bâtiments suivent)
     if n_bat_v:
@@ -343,6 +477,18 @@ def main():
     can[V[:, 2] + oz > top[vj, vi]] = 0
     canopy = np.clip(np.round(can * 4), 0, 252).astype(np.uint8)  # pas de 25 cm
     canopy[wall] = 253  # murs des bâtiments
+    if bati_poisson:
+        # surface unique : faces raides ou tournées vers le bas dans l'emprise d'un bâtiment (plus 1,5 m) = murs, dessous :
+        # teinte neutre comme les murs de batiments.py (la photo prise d'en haut n'a rien à y montrer)
+        import controle_batiments as cbat
+        from scipy import ndimage as _nd
+        lab_b, _, _ = cbat.emprises(x, y, z, c, ex0, ey0, ex1, ey1)
+        pres = _nd.binary_dilation(lab_b > 0, iterations=3)
+        mesh.compute_vertex_normals()
+        nz = np.asarray(mesh.vertex_normals)[:, 2]
+        bi = ((V[:, 0] + ox - ex0) / cbat.CELL).astype(int).clip(0, pres.shape[1] - 1)
+        bj = ((V[:, 1] + oy - ey0) / cbat.CELL).astype(int).clip(0, pres.shape[0] - 1)
+        canopy[pres[bj, bi] & (nz < 0.6)] = 253
     # 5. repère de la tuile z12 (mètres vrais), via WGS84 → mercator
     lon, lat = TO_WGS.transform(V[:, 0] + ox, V[:, 1] + oy)
     mx = (np.asarray(lon) + 180) / 360
@@ -403,12 +549,24 @@ def main():
         'version': 2, 'sommets': int(len(W)), 'triangles': int(len(T)), 'batiments_sommets': int(n_bat_v), 'points': int(len(P)), 'points_ajoutes': int(n_fill), 'raide': round(raide, 4), 'profondeur': depth, 'trous': trous,
         'secondes': {a: round(b, 1) for a, b in chrono.items()} | {'total': round(time.time() - T0, 1)}
     }
+    if bati_poisson:
+        head_json.update(head_extra)
+    if bati_ctrl is not None:
+        # (contrôles sur la fenêtre de données, marge comprise ; le détail par bâtiment va dans le rapport)
+        head_json['batiments'] = {'version': 5, 'controles': bati_ctrl[0], 'replis': bati_stats.get('niveaux', {}),
+                                  'avec_dessous': bati_stats.get('avec_dessous', 0),
+                                  'defauts_restants': bati_stats.get('defauts_restants', {})}
     os.makedirs(sortie, exist_ok=True)
     tmp = out + '.part'
     with open(tmp, 'wb') as f:
         f.write((json.dumps(head_json) + '\n').encode())
         f.write(W.tobytes()); f.write(Nv.astype(np.float32).tobytes()); f.write(ao.tobytes()); f.write(canopy.tobytes()); f.write(T.tobytes())
     os.replace(tmp, out)
+    if bati_ctrl is not None:
+        # rapport des bâtiments (à côté du bloc, ignoré par paquet-build.ts qui ne lit que les .blk)
+        with open(out[:-4] + '.batiments.json', 'w') as f:
+            json.dump({'bloc': [x16, y16], 'resume': bati_ctrl[0], 'defauts': bati_ctrl[1],
+                       'batiments': bati_stats.get('par_batiment', [])}, f, ensure_ascii=False, indent=1)
     print(json.dumps(head_json), flush=True)
 
 

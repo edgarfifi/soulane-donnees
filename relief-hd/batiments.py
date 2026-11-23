@@ -23,6 +23,18 @@
 #   carte : balcons en saillie, loggias et embrasures en creux. Bords de la grille (coins, haut, pied) à plat : les murs
 #   voisins et la sous-face s'y raccordent sans jour.
 # - Murs jusqu'à 0,5 m sous le sol (le sol, interpolé sous le bâtiment, ne laisse aucun jour).
+#
+# Version 5 (23/11/2026, Edgar : « il faut qu'il n'y ait JAMAIS de défaut… hyper cohérent et hyper transférable ») :
+# - DESSOUS MESURÉS : entre un point mesuré (sol, végétation, eau) et l'avion, rien de solide. Ces RAYONS LIBRES
+#   (direction de l'avion : bloc.vers_capteur) disent où il y a du vide sous un toit : plateforme ou gare au-dessus de la
+#   pente, passerelle, hall ouvert. Là, le mur s'arrête au-dessus du vide (au lieu d'un « rideau » descendu jusqu'au sol)
+#   et le bâtiment est fermé par un DESSOUS tourné vers le bas (`_dessous`, `_croisements`, `_pied`). Sans rayon libre,
+#   rien ne change (mur jusqu'au sol, comme la v4) : rien n'est inventé.
+# - JUGEMENT de chaque bâtiment au moment de le construire (controle_batiments.py : murs repliés, aiguilles, jours entre
+#   les morceaux, toit loin des points, triangles) et REPLI sur une forme plus sûre de ce qui est en cause seulement : murs
+#   plats (relief des façades retiré), contour simple (Douglas-Peucker, retrait fixe), toit mesuré (surface mesurée au
+#   lieu des pans). Ce qui a été replié et pourquoi : stats['par_batiment'], rapport du bloc.
+# - Correction : les hauteurs des points intérieurs du toit étaient décalées quand `_toit` en écartait un (v4).
 # Sortie : sommets (L93 local), triangles, et un drapeau « mur » par sommet (murs, rives, sous-faces : le moteur les teinte
 # en neutre, la photo prise d'en haut n'a rien à y montrer).
 import numpy as np
@@ -54,6 +66,30 @@ SOUS_TOIT = 0.5  # m : un point de façade est au moins ça sous le point le plu
 BRUIT = 0.10  # m : écart au plan du mur sous lequel on reste à plat (bruit de mesure et décalage des lignes de vol)
 SIGMA_H, SIGMA_V = 0.5, 0.7  # m : lissage de la carte de relief le long du mur et à la verticale
 POIDS_PLEIN = 0.08  # poids gaussien des cases mesurées au-dessus duquel la carte garde toute sa valeur
+
+# Dessous (version 5) : rayons libres
+CLASSES_LIBRES = (2, 3, 4, 5, 9)  # sol, végétation, eau : le rayon de ces points vers l'avion ne traverse rien de solide
+LIBRE_DIST = 10.0  # m : points libres gardés à moins de ça d'une emprise (un rayon à 29° parcourt 5,5 m pour 10 m de haut)
+DZ = 0.5  # m : pas vertical des échantillons d'un rayon
+PROF_MIN = 2.0  # m : un échantillon compte à plus de ça à l'intérieur de l'emprise des murs (avant-toits, balcons, mur mal posé : non)
+POUTRE = 0.5  # m : épaisseur gardée au moins sous le haut du mur (0,25 m sous le toit) (bord de plateforme, poutre) ; jamais de vide plus haut
+LEVE_MIN = 2.0  # m : vide mesuré d'au moins ça au-dessus du sol pour qu'une case compte comme levée
+LEVE_CASES = 16  # cases (4 m²) : plus petit morceau de dessous levé
+LEVE_MIN_MUR = 1.5  # m : pied de mur levé d'au moins ça au-dessus du sol (sinon le mur descend jusqu'au sol)
+PROLONGE = 4.0  # m : zone levée prolongée d'autant à l'intérieur (dessous des plateformes dont le sol n'a pas été vu)
+TROU_COUPES = 8  # coupes (4 m) : trou sans mur mesuré entre deux morceaux levés d'un mur, levé aussi
+PILIER_COUPES = 5  # coupes (2 m) : pilier mesuré plus étroit entre deux morceaux levés : levé aussi (sinon un pan de mur
+#                    isolé pendrait sous le dessous, ouvert des deux côtés)
+
+# Jugement de chaque bâtiment (contrôles) : au-delà, repli sur une forme plus sûre (_echoue)
+RET_MAX, RET_PART = 20, 0.15  # murs repliés (relief) : plus de max(20, 15 %) des triangles des murs
+AIG_MAX, AIG_PART = 20, 0.15  # aiguilles et faces dégénérées des murs : plus de max(20, 15 %)
+JOURS_MAX = 1.0  # m de jours au-dessus du sol
+TOIT_P90_MAX = 1.5  # m : écart du toit aux points mesurés (90 % des cases sous ça)
+TRI_MAX = 80000  # triangles d'un bâtiment (au-delà : murs plats)
+
+# Sortes de triangles (stats['types_triangles'], contrôles)
+TOIT, RIVE_, SOUS_FACE, MUR, DESSOUS = 0, 1, 2, 3, 4
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -312,13 +348,18 @@ def pans(t, m):
 # ----------------------------------------------------------------------------------------------------------------------
 # Toit : triangulation dans le contour
 # ----------------------------------------------------------------------------------------------------------------------
+TOITS_CONTRAINTS = [0, 0]  # (toits faits par triangulation contrainte, points intérieurs ajoutés) : compte rendu
+
+
 def _toit(B, IP):
     """Triangles du toit : sommets du bord B (Nb, 2, sens trigonométrique, côtés recoupés tous les 0,5 m) puis points
     intérieurs IP. Delaunay gardée dans le contour ; chaque segment du bord doit être une arête d'un triangle gardé (le toit
-    se raccorde exactement à la rive), sinon triangulation contrainte du seul bord (shapely). Rend (indices, sommets 2D)."""
+    se raccorde exactement à la rive), sinon triangulation contrainte du seul bord (shapely). Rend (indices, sommets 2D,
+    indices dans IP des points intérieurs gardés : les sommets 2D sont B puis IP[gardés])."""
     nb = len(B)
     ok = False
     tri = None
+    kept = np.arange(len(IP))
     for essai in range(3):
         P2 = np.r_[B, IP] if len(IP) else B
         if len(P2) < 3:
@@ -329,11 +370,16 @@ def _toit(B, IP):
         except Exception:
             break
         tri = tri[points_in_poly(P2[tri].mean(1), B)]
-        e = np.r_[tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]
-        have = set(map(tuple, np.sort(e, 1).tolist()))
+        e = np.sort(np.r_[tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]], 1)
+        have = set(map(tuple, e.tolist()))
         miss = [i for i in range(nb) if (min(i, (i + 1) % nb), max(i, (i + 1) % nb)) not in have]
         if not miss:
-            ok = True
+            # (version 5 : un TROU dans le toit, triangle écarté parce que son centre tombait hors d'un contour très creusé :
+            # arête intérieure d'un seul triangle ; vu le 23/11 au Praz, 30 m de jours. Repli : triangulation contrainte.)
+            a_, b_, c_ = P2[tri[:, 0]], P2[tri[:, 1]], P2[tri[:, 2]]
+            aire = 0.5 * np.abs((b_[:, 0] - a_[:, 0]) * (c_[:, 1] - a_[:, 1]) - (b_[:, 1] - a_[:, 1]) * (c_[:, 0] - a_[:, 0]))
+            aire_poly = 0.5 * abs(np.sum(B[:, 0] * np.roll(B[:, 1], -1) - np.roll(B[:, 0], -1) * B[:, 1]))
+            ok = aire_poly - aire.sum() < max(0.5, 0.005 * aire_poly)
             break
         # arête du bord absente : les points intérieurs trop proches d'elle s'en vont, et on recommence
         if not len(IP):
@@ -343,7 +389,9 @@ def _toit(B, IP):
             a_, b_ = B[i], B[(i + 1) % nb]
             far &= np.hypot(*(IP - (a_ + b_) / 2).T) > np.hypot(*(b_ - a_)) / 2 + 0.3
         IP = IP[far]
+        kept = kept[far]
     if not ok:
+        TOITS_CONTRAINTS[0] += 1
         import shapely
         from shapely.geometry import Polygon
         pos = {(round(float(a), 6), round(float(b), 6)): i for i, (a, b) in enumerate(B)}
@@ -352,14 +400,17 @@ def _toit(B, IP):
             tri = np.array([[pos[(round(float(a), 6), round(float(b), 6))] for a, b in list(t.exterior.coords)[:3]]
                             for t in g.geoms], np.int64)
         except Exception:
-            return np.zeros((0, 3), np.int64), B
+            return np.zeros((0, 3), np.int64), B, np.zeros(0, np.int64)
         P2 = B
+        # (les points intérieurs sont perdus : toit plan entre ses bords, comme la v4. Les remettre, triangle par triangle,
+        # a été essayé le 23/11 : toit plus fidèle mais dix fois plus d'aiguilles ; piste pour plus tard.)
+        kept = np.zeros(0, np.int64)
     a, b2, c2 = P2[tri[:, 0]], P2[tri[:, 1]], P2[tri[:, 2]]
     cross = (b2[:, 0] - a[:, 0]) * (c2[:, 1] - a[:, 1]) - (b2[:, 1] - a[:, 1]) * (c2[:, 0] - a[:, 0])
     tri = tri[np.abs(cross) > 1e-9]
     cross = cross[np.abs(cross) > 1e-9]
     tri[cross < 0] = tri[cross < 0][:, [0, 2, 1]]
-    return tri, P2
+    return tri, P2, kept
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -408,9 +459,187 @@ def _bilin(D, fu, fz):
     return (D[y0, x0] * (1 - ax) * (1 - ay) + D[y0, x1] * ax * (1 - ay) + D[y1, x0] * (1 - ax) * ay + D[y1, x1] * ax * ay)
 
 
-def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None):
+# ----------------------------------------------------------------------------------------------------------------------
+# Dessous (version 5) : là où le LiDAR a vu du VIDE sous le bâtiment
+# ----------------------------------------------------------------------------------------------------------------------
+def _second_max(cle, h):
+    """Par clé : (clés, deuxième plus grande valeur, nombre de valeurs). Une seule valeur : nombre 1 (valeur sans objet)."""
+    o = np.lexsort((-h, cle))
+    cs, hs = cle[o], h[o]
+    u, st, cnt = np.unique(cs, return_index=True, return_counts=True)
+    sec = np.where(cnt >= 2, hs[np.minimum(st + 1, len(hs) - 1)], -np.inf)
+    return u, sec, cnt
+
+
+def _dessous(Px, Py, Pz, Sx, Sy, Sz, inW, dW, zr_box, sol_box, X0, Y0):
+    """Vide mesuré sous le toit d'un bâtiment. Rayons libres (point du sol ou de la végétation → avion : rien de solide entre
+    les deux) échantillonnés tous les DZ m de hauteur ; un échantillon compte s'il tombe dans l'emprise des murs (W), à plus
+    de PROF_MIN m de son bord (un avant-toit, un mur posé à quelques décimètres près ne comptent pas), sous le toit moins
+    POUTRE. Par case : deuxième plus haute hauteur atteinte par des rayons DIFFÉRENTS (un écho égaré ne suffit pas).
+    Rend (hauteur libre par case (−inf sans mesure), rayons utiles (indices), hauteur libre par case en comptant aussi les
+    échantillons à moins de PROF_MIN du bord : un dessous ne coupe jamais ces rayons-là)."""
+    ny, nx = inW.shape
+    zfree = np.full((ny, nx), -np.inf)
+    if not len(Px):
+        return zfree, np.zeros(0, np.int64), zfree.copy()
+    zmax = float(np.max(zr_box[inW])) - POUTRE if inW.any() else -np.inf
+    n = np.ceil((zmax - Pz) / DZ).astype(int)
+    ok = n > 0
+    if not ok.any():
+        return zfree, np.zeros(0, np.int64), zfree.copy()
+    ri = np.nonzero(ok)[0]
+    n = np.minimum(n[ok], 200)
+    rr = np.repeat(ri, n)
+    step = np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n) + 1
+    dh = step * DZ
+    h = Pz[rr] + dh
+    X = Px[rr] + Sx[rr] / Sz[rr] * dh
+    Y = Py[rr] + Sy[rr] / Sz[rr] * dh
+    cc = np.round((X - X0) / CELL).astype(int)
+    rw = np.round((Y - Y0) / CELL).astype(int)
+    v = (cc >= 0) & (cc < nx) & (rw >= 0) & (rw < ny) & (dh >= 0.5)
+    rr, h, cc, rw = rr[v], h[v], cc[v], rw[v]
+    v = inW[rw, cc] & (h < zr_box[rw, cc] - POUTRE) & (h > sol_box[rw, cc] + 0.3)
+    rr, h, cc, rw = rr[v], h[v], cc[v], rw[v]
+    zbord = np.full((ny, nx), -np.inf)
+    if not len(rr):
+        return zfree, np.zeros(0, np.int64), zbord
+
+    def par_case(rr, h, cc, rw, dest):
+        cell = rw * nx + cc
+        # (plus haut échantillon de chaque rayon dans chaque case, puis deuxième rayon le plus haut par case)
+        k1 = cell * (int(rr.max()) + 1) + rr
+        o = np.lexsort((-h, k1))
+        first = np.r_[True, k1[o][1:] != k1[o][:-1]]
+        sel = o[first]
+        u, sec, cnt = _second_max(cell[sel], h[sel])
+        good = cnt >= 2
+        dest.ravel()[u[good]] = sec[good]
+
+    # toutes les cases de l'emprise des murs (bords compris) : ce que le dessous ne doit jamais couper, là où il y en a un
+    par_case(rr, h, cc, rw, zbord)
+    deep = dW[rw, cc] >= PROF_MIN
+    rr, h, cc, rw = rr[deep], h[deep], cc[deep], rw[deep]
+    if not len(rr):
+        return zfree, np.zeros(0, np.int64), zbord
+    par_case(rr, h, cc, rw, zfree)
+    return zfree, np.unique(rr), zbord
+
+
+def _croisements(Px, Py, Pz, Sx, Sy, Sz, A, B, ztop_ab):
+    """Hauteurs où des rayons libres croisent le mur vertical posé sur le segment A → B (L93), sous son haut moins POUTRE.
+    Rend (position le long du segment 0 à 1, hauteur)."""
+    if not len(Px):
+        return np.zeros(0), np.zeros(0)
+    ax, ay = Sx / Sz, Sy / Sz  # (déplacement horizontal par mètre de hauteur)
+    d = B - A
+    # P.xy + a × t = A + s × d  (t : hauteur au-dessus du point)
+    det = ax * (-d[1]) - ay * (-d[0])
+    ok = np.abs(det) > 1e-9
+    rx, ry = A[0] - Px, A[1] - Py
+    t = np.where(ok, (rx * (-d[1]) - ry * (-d[0])) / np.where(ok, det, 1), -1)
+    s = np.where(ok, (ax * ry - ay * rx) / np.where(ok, det, 1), -1)
+    hz = Pz + t
+    top = ztop_ab[0] + (ztop_ab[1] - ztop_ab[0]) * np.clip(s, 0, 1)
+    v = ok & (s >= 0) & (s <= 1) & (t >= 0.5) & (hz < top - POUTRE)
+    return s[v], hz[v]
+
+
+def _pied(zb, lowf, zs, ztop):
+    """Pied d'un mur, coupe par coupe. zb : haut du vide mesuré (−inf sans mesure), lowf : plus bas point de façade (inf sans),
+    zs : sol, ztop : haut du mur. Un mur est LEVÉ là où les rayons du laser ont vu du vide à plus de LEVE_MIN_MUR au-dessus
+    du sol : il s'arrête en haut de ce vide (des points de façade plus bas sur la même coupe sont un pilier, un escalier :
+    les rayons sont passés à côté). Coupes sans vide mesuré entre deux morceaux levés (moins de TROU_COUPES coupes) : levées
+    aussi, arrêtées aux derniers points mesurés de leur façade, sauf si ces points descendent jusqu'au sol sur plus de
+    PILIER_COUPES coupes (vrai mur : il reste jusqu'au sol ; un pilier plus étroit ne ferait qu'un pan isolé). Morceaux levés de moins de 3 coupes : non. Jamais à moins de POUTRE du haut.
+    Rend (levé, pied, mur mesuré jusqu'au sol) par coupe."""
+    n = len(zb)
+    bas = np.isfinite(lowf) & (lowf - zs < LEVE_MIN_MUR)
+    vide = np.isfinite(zb) & (zb - zs >= LEVE_MIN_MUR)
+    lv = vide.copy()
+    zbot = np.full(n, -np.inf)
+    if not lv.any():
+        return lv, zbot, bas
+    ii = np.arange(n)
+    zv = np.where(vide, zb, np.interp(ii, ii[vide], zb[vide]))
+    idx = np.nonzero(vide)[0]
+    haut = np.isfinite(lowf) & ~bas  # (façade mesurée, mais pas jusqu'au sol : bord de plateforme, poutre)
+    for a, b in zip(idx[:-1], idx[1:]):
+        if b - a <= 1:
+            continue
+        mid = np.arange(a + 1, b)
+        # trou entre deux morceaux levés : levé s'il n'a que des coupes à façade haute ou sans point (moins de TROU_COUPES
+        # de suite), ou un pilier étroit
+        inconnu = ~haut[mid] & ~bas[mid]
+        bords = np.diff(np.r_[0, inconnu.astype(int), 0])
+        plus_long = int(np.max(np.nonzero(bords == -1)[0] - np.nonzero(bords == 1)[0])) if inconnu.any() else 0
+        long_inconnu = plus_long > TROU_COUPES
+        if (not bas[mid].any() and not long_inconnu) or b - a <= PILIER_COUPES:
+            lv[mid] = True
+            zv[mid] = np.where(haut[mid], np.minimum(zv[mid], lowf[mid] - 0.3), zv[mid])
+    lab1, n1 = ndimage.label(lv)
+    for q in range(1, n1 + 1):
+        if (lab1 == q).sum() < 3:
+            lv[lab1 == q] = False
+    if not lv.any():
+        return lv, zbot, bas
+    # (lissage : médiane de 5 coupes parmi les coupes levées)
+    zs5 = np.array([np.median(zv[max(0, i - 2):i + 3][lv[max(0, i - 2):i + 3]]) if lv[i] else zv[i] for i in range(n)])
+    zbot = np.minimum(np.maximum(zs5, zs + LEVE_MIN_MUR), ztop - POUTRE)
+    lv &= zbot - zs >= LEVE_MIN_MUR
+    return lv, zbot, bas
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Jugement d'un bâtiment (contrôles de controle_batiments.py, sur ce bâtiment seul)
+# ----------------------------------------------------------------------------------------------------------------------
+def _juge(Vb, Tb, Mb, Kb, sol_local, ecart_toit, dans_local=None):
+    """Défauts d'un bâtiment construit (repère L93 décalé), comptés par sorte de triangles : les murs (relief des façades)
+    à part du reste (toit : celui de la v4 validée, jugé par son écart aux points). Rend un dict."""
+    import controle_batiments as cb
+    deg, aig = cb.formes(Vb, Tb)
+    ret = cb.retournees(Vb, Tb, Mb)
+    jl, _ = cb.jours(Vb, Tb, sol_local, dans=dans_local)
+    e = np.abs(ecart_toit)
+    mur = Kb == MUR
+    return {'triangles': int(len(Tb)), 'triangles_murs': int(mur.sum()), 'retournees': int(ret.sum()),
+            'retournees_murs': int((ret & mur).sum()), 'aiguilles': int((aig | deg).sum()),
+            'aiguilles_murs': int(((aig | deg) & mur).sum()), 'jours_m': round(jl, 2),
+            'toit_p90': round(float(np.percentile(e, 90)), 2) if len(e) else 0.0}
+
+
+def _echoue(j, opts):
+    """Le bâtiment jugé j doit-il se replier ? Rend [(raison, repli)] : murs repliés ou en aiguille, trop de triangles →
+    « murs plats » (sans relief) ; jours → « contour simple » (Douglas-Peucker, retrait fixe de la v3) ; toit loin des
+    points → « toit mesuré » (surface mesurée au lieu des pans). Chaque repli ne touche que ce qui est en cause."""
+    r = []
+    nm = max(1, j['triangles_murs'])
+    if not opts['plat'] and j['retournees_murs'] > max(RET_MAX, RET_PART * nm):
+        r.append(('retournees', 'plat'))
+    if not opts['plat'] and j['aiguilles_murs'] > max(AIG_MAX, AIG_PART * nm):
+        r.append(('aiguilles', 'plat'))
+    if not opts['plat'] and j['triangles'] > TRI_MAX:
+        r.append(('triangles', 'plat'))
+    if j['jours_m'] > JOURS_MAX:
+        r.append(('jours', 'simple' if not opts['simple'] else ('plat' if not opts['plat'] else None)))
+    if j['toit_p90'] > TOIT_P90_MAX:
+        r.append(('toit', 'mesure' if not opts['mesure'] else None))
+    return r
+
+
+REPLIS = {'plat': 'murs plats', 'simple': 'contour simple', 'mesure': 'toit mesuré'}
+
+
+def _nom(opts):
+    return ' + '.join(REPLIS[o] for o in ('plat', 'simple', 'mesure') if opts[o]) or 'complet'
+
+
+
+
+def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None, capteur=None):
     """x, y, z, c : points (L93) ; sol_z(X, Y) → altitude du sol (L93). Rend (V, T, mur) en repère local (−ox, −oy, −oz).
-    stats : dict facultatif, rempli de mesures (contrôle)."""
+    capteur : direction (unitaire) de chaque point vers l'avion (bloc.vers_capteur) : dessous mesurés (version 5) ; sans
+    elle, murs jusqu'au sol comme la version 4. stats : dict facultatif, rempli de mesures et des contrôles par bâtiment."""
     b = c == 6
     if b.sum() < 50:
         return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros(0, bool)
@@ -438,83 +667,72 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None):
     o = np.argsort(ck, kind='stable')
     cand, ck = cand[o], ck[o]
     kstart = np.searchsorted(ck, np.arange(n + 2))
-    V, T, M = [], [], []
-    nv = 0
-    st = {'batiments': 0, 'regularises': 0, 'murs': 0, 'murs_mesures': 0, 'points_facade': 0, 'triangles_murs': 0,
-          'retraits': []} if stats is None else stats
-    st.update({k: st.get(k, 0) for k in ('batiments', 'regularises', 'murs', 'murs_mesures', 'points_facade',
-                                         'triangles_murs')})
+    # Rayons libres (version 5) : points du sol, de la végétation, de l'eau à moins de LIBRE_DIST d'une emprise, rangés par
+    # bâtiment le plus proche
+    if capteur is not None:
+        lib = np.nonzero(np.isin(c, CLASSES_LIBRES) & (capteur[:, 2] > 0.3))[0]
+        near2 = lab[nr, nc].copy()
+        near2[dist * CELL > LIBRE_DIST] = 0
+        lk = near2[((y[lib] - ey0) / CELL).astype(int).clip(0, ny - 1), ((x[lib] - ex0) / CELL).astype(int).clip(0, nx - 1)]
+        lib, lk = lib[lk > 0], lk[lk > 0]
+        o = np.argsort(lk, kind='stable')
+        lib, lk = lib[o], lk[o]
+        lstart = np.searchsorted(lk, np.arange(n + 2))
+    st = {} if stats is None else stats
+    for k_ in ('batiments', 'regularises', 'murs', 'murs_mesures', 'points_facade', 'triangles_murs', 'points_facade_bruts',
+               'avec_dessous', 'colonnes_levees', 'rayons_libres', 'replis'):
+        st.setdefault(k_, 0)
     st.setdefault('retraits', [])
-
-    def add(P3, tri, wall):
-        """Morceau de maillage (sommets propres : normale à lui) ; tri : indices locaux."""
-        nonlocal nv
-        V.extend(map(tuple, P3))
-        M.extend([wall] * len(P3))
-        T.extend((np.asarray(tri, np.int64) + nv).tolist())
-        nv += len(P3)
-
-    def strip(A, Bp, wall=True):
-        """Bande de quadrilatères entre deux polylignes 3D A (bord du haut) et Bp (bord du bas), même nombre de points ;
-        face vers l'extérieur quand A et Bp vont dans le sens du contour (sens trigonométrique vu de dessus)."""
-        k = len(A)
-        P3 = np.r_[A, Bp]
-        i = np.arange(k - 1)
-        tri = np.r_[np.c_[i, k + i, k + i + 1], np.c_[i, k + i + 1, i + 1]]
-        # (quadrilatères écrasés : écartés)
-        a, b_, c_ = P3[tri[:, 0]], P3[tri[:, 1]], P3[tri[:, 2]]
-        ar = np.linalg.norm(np.cross(b_ - a, c_ - a), axis=1)
-        tri = tri[ar > 1e-6]
-        if len(tri):
-            add(P3, tri, wall)
-
+    st.setdefault('niveaux', {})
+    st.setdefault('defauts_restants', {})
+    st.setdefault('par_batiment', [])
     sl = ndimage.find_objects(lab)
-    for k in range(1, n + 1):
-        box = sl[k - 1]
-        if box is None:
-            continue
-        # (travail sur la boîte du bâtiment + 3 cases : rapide)
-        r0, r1 = max(0, box[0].start - 3), min(ny, box[0].stop + 3)
-        c0, c1 = max(0, box[1].start - 3), min(nx, box[1].stop + 3)
-        m = lab[r0:r1, c0:c1] == k
-        if m.sum() < 32:  # < 8 m²
-            continue
-        tk = np.where(m, t[r0:r1, c0:c1], -1e9)
-        if not (tk > -1e8).any():
-            continue
-        st['batiments'] += 1
-        zr, plab, plans, pente, zmes = pans(tk, m)
-        # bornes de la surface mesurée autour de chaque case (le plan d'un pan prolongé jusqu'au contour ne s'envole pas :
-        # « ailerons » de la v3)
-        mes = m & (tk > -1e8)
-        zhi = ndimage.maximum_filter(np.where(mes, tk, -1e9), 5)
-        zlo = ndimage.minimum_filter(np.where(mes, tk, 1e9), 5)
-        zhi = np.where(zhi > -1e8, zhi, zr)
-        zlo = np.where(zlo < 1e8, zlo, zr)
-        cs = find_contours(np.pad(m, 1).astype(float), 0.5)
-        if not cs:
-            continue
-        cont = max(cs, key=len)[:-1] - 1  # (ligne, colonne) en cases de la boîte
-        # contour en m (repère de la boîte : centre de la case (0, 0) en (0, 0)), sens trigonométrique
-        C = np.c_[cont[:, 1], cont[:, 0]] * CELL
-        if 0.5 * np.sum(C[:, 0] * np.roll(C[:, 1], -1) - np.roll(C[:, 0], -1) * C[:, 1]) < 0:
-            C, cont = C[::-1], cont[::-1]
-        if len(C) < 4:
-            continue
-        # points du contour sur le bord de la fenêtre de données (bâtiment coupé : ce côté-là reste tel quel)
-        bord = (cont[:, 1] + c0 < 0.75) | (cont[:, 0] + r0 < 0.75) | (cont[:, 1] + c0 > nx - 1.75) | (cont[:, 0] + r0 > ny - 1.75)
-        Vr, dp = regularise(C, bord=bord)
-        if valide(Vr, C):
-            poly = Vr
-            st['regularises'] += 1
-        else:
-            poly = dp
-        if len(poly) < 3:
-            continue
-        X0 = ex0 + (c0 + 0.5) * CELL  # (L93 du centre de la case (0, 0) de la boîte)
-        Y0 = ey0 + (r0 + 0.5) * CELL
+    Vg, Tg, Mg, Kg = [], [], [], []
+    nvg = [0]
+
+    def construit(k, opts, prep):
+        """Un bâtiment avec les replis `opts` (plat : murs sans relief ; simple : contour de Douglas-Peucker, retrait fixe de
+        la v3 ; mesure : toit = surface mesurée). Rend (V, T, M, infos) en L93, ou None."""
+        V, T, M, K = [], [], [], []
+        nv = 0
+        info = {'colonnes_levees': 0, 'dessous': False, 'rayons': 0}
+
+        def add(P3, tri, wall, kind):
+            """Morceau de maillage (sommets propres) ; kind : sorte de ses triangles (TOIT, RIVE, SOUS_FACE, MUR, DESSOUS)."""
+            nonlocal nv
+            V.extend(map(tuple, P3))
+            M.extend([wall] * len(P3))
+            T.extend((np.asarray(tri, np.int64) + nv).tolist())
+            K.extend([kind] * len(tri))
+            nv += len(P3)
+
+        def strip(A, Bp, kind):
+            """Bande de quadrilatères entre deux polylignes 3D A (bord du haut) et Bp (bord du bas), même nombre de points ;
+            face vers l'extérieur quand A et Bp vont dans le sens du contour (sens trigonométrique vu de dessus)."""
+            kk = len(A)
+            P3 = np.r_[A, Bp]
+            i = np.arange(kk - 1)
+            tri = np.r_[np.c_[i, kk + i, kk + i + 1], np.c_[i, kk + i + 1, i + 1]]
+            a, b_, c_ = P3[tri[:, 0]], P3[tri[:, 1]], P3[tri[:, 2]]
+            ar = np.linalg.norm(np.cross(b_ - a, c_ - a), axis=1)
+            tri = tri[ar > 1e-6]
+            if len(tri):
+                add(P3, tri, True, kind)
+
+        (r0, r1, c0, c1, m, tk, zr, plab, plans, pente, zmes, zhi, zlo, C, bord, Vr, dp, X0, Y0) = prep
+        if opts['mesure']:
+            zr = zmes
+            plab = -np.ones_like(plab)
         bx = lambda X: (X - X0) / CELL  # noqa: E731  (L93 → colonne de la boîte)
         by = lambda Y: (Y - Y0) / CELL  # noqa: E731
+        if not opts['simple'] and valide(Vr, C):
+            poly = Vr
+            info['regularise'] = True
+        else:
+            poly = dp
+            info['regularise'] = False
+        if len(poly) < 3:
+            return None
         dist_m, (ir_m, ic_m) = ndimage.distance_transform_edt(~m, return_indices=True)
         dist_in = ndimage.distance_transform_edt(m)
         npl = (max(plans) + 1) if plans else 1
@@ -547,17 +765,15 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None):
         dirs = seg / np.maximum(slen, 1e-9)[:, None]
         nrm = np.c_[dirs[:, 1], -dirs[:, 0]]  # normale extérieure
         ncut = np.maximum(1, np.ceil(slen / GRILLE).astype(int))
-        Bl, Be = [], []  # bord du toit (L93) et côté de chaque point
+        Bl, Be = [], []
         for j in range(Lp):
             f = np.arange(ncut[j]) / ncut[j]
             Bl.append(Pl[j] + f[:, None] * seg[j])
             Be.append(np.full(ncut[j], j))
         B = np.concatenate(Bl)
-        Be = np.concatenate(Be)
         zt = roof_z(B[:, 0], B[:, 1])
         # Bord du toit (rive) : une DROITE quand les trois quarts des hauteurs mesurées le long du côté sont à moins de
-        # 0,3 m d'une droite (égout d'un toit, rampant d'un pignon d'un seul pan ; le reste : neige, gouttière, bruit) ;
-        # sinon (faîtage d'un pignon, lucarne) un léger lissage. Les coins restent communs aux deux côtés.
+        # 0,3 m d'une droite ; sinon un léger lissage. Les coins restent communs aux deux côtés.
         cum0 = np.r_[0, np.cumsum(ncut)]
         zt1 = np.r_[zt, zt[:1]]
         for j in range(len(ncut)):
@@ -576,40 +792,42 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None):
                 zt[qq[1:-1]] = (A_ @ co)[1:-1]
             else:
                 zt[qq[1:-1]] = ndimage.median_filter(zz, 3, mode='nearest')[1:-1]
-        Bz = np.r_[zt, zt[:1]]  # (bord fermé : le dernier point rejoint le premier)
+        Bz = np.r_[zt, zt[:1]]
         B1 = np.r_[B, B[:1]]
         # ---- TOIT : bord + centres des cases à plus de 0,3 m du bord
+        import shapely
+        from shapely.geometry import LinearRing
         rI, cI = np.nonzero(m)
         ip = np.c_[X0 + cI * CELL, Y0 + rI * CELL]
         ins = points_in_poly(ip, Pl)
         if ins.any():
-            import shapely
-            from shapely.geometry import LinearRing
             ring = LinearRing(Pl)
             dd = shapely.distance(shapely.points(ip[ins]), ring)
             sel = np.nonzero(ins)[0][dd > 0.3]
         else:
             sel = np.zeros(0, int)
-        tri, P2 = _toit(B, ip[sel])
+        tri, P2, kin = _toit(B, ip[sel])
         if len(tri) == 0:
-            continue
-        Z2 = np.r_[zt, zr[rI[sel], cI[sel]]][: len(P2)]
-        add(np.c_[P2, Z2], tri, False)
+            return None
+        # (v4 : hauteurs des points intérieurs prises dans la liste d'avant le tri de _toit : décalées dès qu'un point
+        # était écarté ; corrigé le 23/11, version 5)
+        Z2 = np.r_[zt, zr[rI[sel][kin], cI[sel][kin]]]
+        add(np.c_[P2, Z2], tri, False, TOIT)
+        # écart du toit au point le plus haut des cases mesurées (contrôle) : cases intérieures gardées dans le toit
+        tcell = tk[rI[sel][kin], cI[sel][kin]]
+        info['ecart_toit'] = (Z2[len(B):] - tcell)[tcell > -1e8]
         # ---- FAÇADES : points de chaque côté, retrait du mur
         pidx = cand[kstart[k]:kstart[k + 1]]
         if len(pidx):
-            # (tri rapide : ni les points du toit, ni ceux à plus de FACADE_DIST à l'intérieur de l'emprise)
             prr = np.clip(np.round(by(y[pidx])).astype(int), 0, m.shape[0] - 1)
             pcc = np.clip(np.round(bx(x[pidx])).astype(int), 0, m.shape[1] - 1)
             din = dist_in[prr, pcc] * CELL
-            # point le plus haut de la case du point (toit, terrasse, dalle de balcon vue d'en haut) : un point de façade
-            # est en dessous (sous l'avant-toit ou sous le bord du toit) ; hors de l'emprise, aucune case : gardé
             gtop = t[np.clip(((y[pidx] - ey0) / CELL).astype(int), 0, ny - 1), np.clip(((x[pidx] - ex0) / CELL).astype(int), 0, nx - 1)]
             pidx = pidx[(din <= FACADE_DIST + CELL) & (z[pidx] < gtop - SOUS_TOIT)]
         fx, fy, fz = x[pidx], y[pidx], z[pidx]
-        st['points_facade_bruts'] = st.get('points_facade_bruts', 0) + len(pidx)
+        info['points_facade_bruts'] = len(pidx)
         if len(pidx):
-            rel = np.c_[fx, fy][:, None, :] - Pl[None, :, :]  # (np, Lp, 2)
+            rel = np.c_[fx, fy][:, None, :] - Pl[None, :, :]
             tt = np.einsum('pjk,jk->pj', rel, dirs)
             ss = np.einsum('pjk,jk->pj', rel, nrm)
             tcl = np.clip(tt, 0, slen[None, :])
@@ -617,44 +835,37 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None):
             ej = np.argmin(dseg, 1)
             r_ = np.arange(len(pidx))
             pt, ps, pd = tt[r_, ej], ss[r_, ej], dseg[r_, ej]
-            # bord du toit au-dessus du point (interpolé le long du côté) et sol sous le point
             cum = np.r_[0, np.cumsum(ncut)]
             fpos = cum[ej] + np.clip(pt / np.maximum(slen[ej], 1e-9), 0, 1) * ncut[ej]
             i0 = np.floor(fpos).astype(int).clip(0, len(Bz) - 2)
             ztp = Bz[i0] + (Bz[i0 + 1] - Bz[i0]) * (fpos - i0)
             zs = sol_z(fx, fy)
-            # (classe 1 près du sol : voitures, barrières, tas de neige ; au-delà du bord du toit : rien du bâtiment)
             haut = np.where(c[pidx] == 1, 1.5, 0.3)
             okp = (ps >= -FACADE_DIST) & (ps <= DEBORD_PT) & (pd <= FACADE_DIST) & (fz < ztp - 0.3) & (fz > zs + haut)
         else:
             okp = np.zeros(0, bool)
             ej = pt = ps = ztp = np.zeros(0)
-        st['points_facade'] += int(okp.sum())
+        info['points_facade'] = int(okp.sum())
         flat = pente <= PENTE_TOIT
         dmes = np.full(Lp, np.nan)
-        # position du mur : médiane de l'écart de ses points « bâtiment » (classe 6), hors du mètre sous le bord du toit
-        # (gouttières, corniches de neige) ; la classe 1 (garde-corps, objets contre le mur) n'y entre qu'à défaut
         c6 = (c[pidx] == 6) & (fz < ztp - 1.0) if len(pidx) else np.zeros(0, bool)
-        for j in range(Lp):
-            sj = okp & (ej == j)
-            s6 = sj & c6
-            use = s6 if s6.sum() >= max(FACADE_MIN, slen[j] / 1.0) else sj
-            if use.sum() >= max(FACADE_MIN, slen[j] / 1.0):
-                dmes[j] = float(np.clip(np.median(ps[use]), -RETRAIT_MAX, 0.0))
-        st['murs'] += Lp
-        st['murs_mesures'] += int(np.isfinite(dmes).sum())
-        st['retraits'].extend(dmes[np.isfinite(dmes)].tolist())
-        # côtés sans assez de points : retrait médian des murs mesurés du bâtiment, sinon celui de la v3
+        if not opts['simple']:
+            for j in range(Lp):
+                sj = okp & (ej == j)
+                s6 = sj & c6
+                use = s6 if s6.sum() >= max(FACADE_MIN, slen[j] / 1.0) else sj
+                if use.sum() >= max(FACADE_MIN, slen[j] / 1.0):
+                    dmes[j] = float(np.clip(np.median(ps[use]), -RETRAIT_MAX, 0.0))
+        info['murs'] = Lp
+        info['murs_mesures'] = int(np.isfinite(dmes).sum())
+        info['retraits'] = dmes[np.isfinite(dmes)].tolist()
         if np.isfinite(dmes).any():
             dfill = float(np.median(dmes[np.isfinite(dmes)]))
         else:
             dfill = 0.0 if flat else -DEBORD
         dj = np.where(np.isfinite(dmes), dmes, dfill)
-        if stats is not None and 'detail' in stats:
-            stats['detail'].append({'k': k, 'n': Lp, 'mesures': dmes.tolist(), 'pente': pente})
 
         def coins(dj):
-            """Coins des murs : intersection des lignes de murs voisines (bord du toit décalé de dj vers l'intérieur)."""
             W = np.zeros((Lp, 2))
             for j in range(Lp):
                 i = (j - 1) % Lp
@@ -669,7 +880,7 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None):
         def tient(W):
             from shapely.geometry import Polygon
             sw = np.roll(W, -1, 0) - W
-            if np.any(np.einsum('jk,jk->j', sw, seg) <= 0):  # (un mur ne doit pas changer de sens)
+            if np.any(np.einsum('jk,jk->j', sw, seg) <= 0):
                 return False
             p = Polygon(W)
             return p.is_valid and p.area > 0.5 * Polygon(Pl).area
@@ -681,29 +892,144 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None):
             if not tient(W):
                 dj = np.zeros(Lp)
                 W = Pl.copy()
-        # ---- RIVE, SOUS-FACE, MUR (relief mesuré), côté par côté
         cum = np.r_[0, np.cumsum(ncut)]
-        # haut des murs aux coins : une seule valeur par coin, commune aux deux murs (sinon un jour le long de l'arête)
         zc = np.minimum(roof_z(W[:, 0], W[:, 1]), surf_z(W[:, 0], W[:, 1])) - RIVE
         au_bord = np.hypot(*(W - Pl).T) < 0.05
         zc[au_bord] = Bz[cum[:-1]][au_bord] - RIVE
+        # ---- haut et pied de chaque mur, coupe par coupe (le pied : sous le sol, ou au-dessus du vide mesuré)
+        Wjs, ztops, zgs, zss = [], [], [], []
         for j in range(Lp):
-            q = np.arange(cum[j], cum[j + 1] + 1)  # points du bord de ce côté (le dernier = premier du côté suivant)
+            f = np.arange(ncut[j] + 1) / ncut[j]
+            Wj = W[j] + f[:, None] * (W[(j + 1) % Lp] - W[j])
+            ztop = np.minimum(roof_z(Wj[:, 0], Wj[:, 1]), surf_z(Wj[:, 0], Wj[:, 1])) - RIVE
+            Bj = B1[np.arange(cum[j], cum[j + 1] + 1)]
+            if abs(dj[j]) < 0.05 and np.allclose(Wj, Bj, atol=0.05):
+                ztop = Bz[np.arange(cum[j], cum[j + 1] + 1)] - RIVE
+            ztop[0], ztop[-1] = zc[j], zc[(j + 1) % Lp]
+            zs_ = sol_z(Wj[:, 0], Wj[:, 1])
+            Wjs.append(Wj)
+            ztops.append(ztop)
+            zss.append(zs_)
+            zgs.append(np.minimum(zs_ - 0.5, ztop - 1.0))
+        # ---- DESSOUS (version 5) : murs arrêtés au-dessus du vide que le LiDAR a vu
+        leve = [np.zeros(ncut[j] + 1, bool) for j in range(Lp)]
+        zfield = None
+        if capteur is not None:
+            li = lib[lstart[k]:lstart[k + 1]]
+            ny_, nx_ = m.shape
+            gx_, gy_ = np.meshgrid(X0 + np.arange(nx_) * CELL, Y0 + np.arange(ny_) * CELL)
+            inW = points_in_poly(np.c_[gx_.ravel(), gy_.ravel()], W).reshape(ny_, nx_)
+            if len(li) and inW.any():
+                zrmax = float(np.max(zr[m])) if m.any() else -np.inf
+                li = li[z[li] < zrmax - POUTRE - 1.0]
+            if len(li) and inW.any():
+                info['rayons'] = len(li)
+                dW = ndimage.distance_transform_edt(inW) * CELL - 0.5 * CELL
+                # toit au-dessus de chaque case de l'emprise des murs (cases hors de m : celle de m la plus proche)
+                zr_box = zr[ir_m, ic_m]
+                sol_box = np.full((ny_, nx_), -1e9)
+                sol_box[inW] = sol_z(gx_[inW], gy_[inW])
+                Sx, Sy, Sz = capteur[li, 0], capteur[li, 1], capteur[li, 2]
+                zfree, utiles, zbord = _dessous(x[li], y[li], z[li], Sx, Sy, Sz, inW, dW, zr_box, sol_box, X0, Y0)
+                levc = np.isfinite(zfree) & (zfree - sol_box >= LEVE_MIN)
+                if levc.any():
+                    lb, nl = ndimage.label(levc, np.ones((3, 3)))
+                    tailles = np.bincount(lb.ravel(), minlength=nl + 1)
+                    levc &= tailles[lb] >= LEVE_CASES
+                if levc.any():
+                    # champ du dessous. Chaque hauteur libre n'est qu'un MINIMUM du dessous : loin des bords, aucun rayon ne
+                    # monte jusqu'à lui (il faut sortir par le côté), d'où des creux qui ne sont pas dans le bâtiment. Le
+                    # dessous suit donc le toit, à l'ÉPAISSEUR la plus faible mesurée sur la zone levée (20 % des cases :
+                    # là où les rayons approchent le dessous, près des bords), jamais sous les hauteurs libres mesurées ;
+                    # zone levée prolongée de PROLONGE m (bords des murs, où le champ commence à PROF_MIN ; dessous de
+                    # plateforme où le sol n'a pas été vu : pas de pilier inventé jusqu'au sol au milieu du vide), trous
+                    # bouchés.
+                    dlev, (il, jl) = ndimage.distance_transform_edt(~levc, return_indices=True)
+                    proche = ndimage.binary_fill_holes((dlev * CELL <= PROLONGE) | levc) & inW
+                    zl = ndimage.maximum_filter(np.where(levc, zfree, -np.inf), 5)
+                    zl = np.where(np.isfinite(zl), zl, zfree[il, jl])
+                    lz, nz_ = ndimage.label(proche, np.ones((3, 3)))
+                    # ailleurs dans l'emprise des murs : la hauteur libre de la case levée la plus proche (le dessous ne
+                    # redescend jamais en rampe jusqu'au sol au milieu du vide, où les rayons entrés par un mur levé le
+                    # traverseraient ; là où les murs restent jusqu'au sol, ce creux est fermé et ne se voit pas)
+                    zfield = np.where(inW, zfree[il, jl], -np.inf)
+                    for q in range(1, nz_ + 1):
+                        cq = lz == q
+                        eq = (zr_box - zfree)[cq & levc]
+                        if not len(eq):
+                            continue
+                        ep = max(float(np.percentile(eq, 20)), POUTRE + RIVE)
+                        zfield[cq] = np.maximum(zr_box[cq] - ep, zl[cq])
+                    # (près des murs, le dessous passe au-dessus de tous les rayons mesurés)
+                    zfield = np.where(proche & np.isfinite(zbord), np.maximum(zfield, zbord), zfield)
+                    zfield = np.minimum(zfield, zr_box - POUTRE)
+                    # rayons qui ont traversé une case levée : leurs passages au travers des murs comptent aussi
+                    ru = utiles
+                    zbs_, lowfs_ = [None] * Lp, [None] * Lp
+                    for j in range(Lp):
+                        Wj, ztop = Wjs[j], ztops[j]
+                        # champ au pied du mur : case levée la plus proche à moins de 2 m (le champ commence à PROF_MIN)
+                        cw = np.clip(np.round(bx(Wj[:, 0])).astype(int), 0, nx_ - 1)
+                        rw_ = np.clip(np.round(by(Wj[:, 1])).astype(int), 0, ny_ - 1)
+                        dd_ = dlev[rw_, cw] * CELL
+                        zb = np.where(dd_ <= 2.0, zfield[il[rw_, cw], jl[rw_, cw]], -np.inf)
+                        zb = np.where(np.isfinite(zb), zb, -np.inf)
+                        if len(ru):
+                            s_, h_ = _croisements(x[li][ru], y[li][ru], z[li][ru], Sx[ru], Sy[ru], Sz[ru], W[j],
+                                                  W[(j + 1) % Lp], (ztop[0], ztop[-1]))
+                            if len(s_):
+                                col = np.clip(np.round(s_ * ncut[j]).astype(int), 0, ncut[j])
+                                u_, sec, cnt = _second_max(col, h_)
+                                # (deux rayons différents sur la coupe ou ses voisines)
+                                hc = np.full(ncut[j] + 1, -np.inf)
+                                for dc in (-1, 0, 1):
+                                    cc_ = np.clip(col + dc, 0, ncut[j])
+                                    u2, s2, n2 = _second_max(cc_, h_)
+                                    hc[u2[n2 >= 2]] = np.maximum(hc[u2[n2 >= 2]], s2[n2 >= 2])
+                                zb = np.maximum(zb, hc)
+                        # points de façade de chaque coupe (et de ses voisines) : le plus bas
+                        lowf = np.full(ncut[j] + 1, np.inf)
+                        sj = okp & (ej == j) if len(okp) else np.zeros(0, bool)
+                        if sj.any():
+                            wl_ = np.hypot(*(W[(j + 1) % Lp] - W[j]))
+                            uu_ = (np.c_[fx[sj], fy[sj]] - W[j]) @ ((W[(j + 1) % Lp] - W[j]) / max(1e-9, wl_))
+                            ee_ = (np.c_[fx[sj], fy[sj]] - W[j]) @ nrm[j]
+                            ff = np.abs(ee_) < 1.5
+                            cu = np.clip(np.round(uu_[ff] / max(wl_, 1e-9) * ncut[j]).astype(int), 0, ncut[j])
+                            for dc in (-1, 0, 1):
+                                np.minimum.at(lowf, np.clip(cu + dc, 0, ncut[j]), fz[sj][ff])
+                        zbs_[j], lowfs_[j] = zb, lowf
+                    # Pieds des murs : tout le tour du bâtiment d'un seul tenant (coupes de chaque mur sans la dernière, qui
+                    # est la première du mur suivant), en boucle : les coins et les murs courts suivent leurs voisins.
+                    def tour(L_):
+                        return np.concatenate([L_[j][:-1] for j in range(Lp)])
+                    ZB, LF, ZS, ZT = tour(zbs_), tour(lowfs_), tour(zss), tour(ztops)
+                    nt = len(ZB)
+                    lv3, zb3, bas3 = _pied(np.r_[ZB, ZB, ZB], np.r_[LF, LF, LF], np.r_[ZS, ZS, ZS], np.r_[ZT, ZT, ZT])
+                    lvT, zbT = lv3[nt:2 * nt], zb3[nt:2 * nt]
+                    for j in range(Lp):
+                        q = (cum[j] + np.arange(ncut[j] + 1)) % nt
+                        leve[j] = lvT[q]
+                        zgs[j] = np.where(leve[j], zbT[q], zgs[j])
+                        if stats is not None and 'pieds' in stats:
+                            stats['pieds'].append({'k': k, 'j': j, 'niveau': _nom(opts), 'W0': W[j], 'W1': W[(j + 1) % Lp],
+                                                   'zs': zss[j], 'ztop': ztops[j], 'zb': zbs_[j], 'lowf': lowfs_[j],
+                                                   'lv': leve[j].copy()})
+            # coins : une seule hauteur de pied pour les deux murs (la même coupe du tour, au millimètre près)
+            for j in range(Lp):
+                i = (j - 1) % Lp
+                v_ = zgs[j][0] if leve[j][0] else min(zgs[i][-1], zgs[j][0])
+                zgs[i][-1] = zgs[j][0] = v_
+        # ---- RIVE, SOUS-FACE, MUR (relief mesuré), côté par côté
+        tri_murs = 0
+        for j in range(Lp):
+            q = np.arange(cum[j], cum[j + 1] + 1)
             Bj = B1[q]
             zB = Bz[q]
             f = np.arange(ncut[j] + 1) / ncut[j]
-            Wj = W[j] + f[:, None] * (W[(j + 1) % Lp] - W[j])
-            # haut du mur : sous-face du toit (parallèle au toit, RIVE dessous)
-            ztop = np.minimum(roof_z(Wj[:, 0], Wj[:, 1]), surf_z(Wj[:, 0], Wj[:, 1])) - RIVE
-            if abs(dj[j]) < 0.05 and np.allclose(Wj, Bj, atol=0.05):
-                ztop = zB - RIVE
-            ztop[0], ztop[-1] = zc[j], zc[(j + 1) % Lp]
-            zg = np.minimum(sol_z(Wj[:, 0], Wj[:, 1]) - 0.5, ztop - 1.0)
-            # rive : tranche du toit
-            strip(np.c_[Bj, zB], np.c_[Bj, zB - RIVE])
-            # sous-face : du bas de la rive au haut du mur
-            strip(np.c_[Bj, zB - RIVE], np.c_[Wj, ztop])
-            # mur : grille de GRILLE m déplacée selon la carte de relief de ses points
+            Wj, ztop, zg = Wjs[j], ztops[j], zgs[j]
+            strip(np.c_[Bj, zB], np.c_[Bj, zB - RIVE], RIVE_)
+            strip(np.c_[Bj, zB - RIVE], np.c_[Wj, ztop], SOUS_FACE)
             wl = np.hypot(*(W[(j + 1) % Lp] - W[j]))
             if wl < 1e-3:
                 continue
@@ -711,14 +1037,14 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None):
             hmax = float(np.max(ztop - zg))
             nvr = max(1, int(np.ceil(hmax / GRILLE)))
             fr = np.arange(nvr + 1) / nvr
-            Zg = ztop[None, :] + (zg - ztop)[None, :] * fr[:, None]  # (rangée, colonne) : du haut vers le bas
+            Zg = ztop[None, :] + (zg - ztop)[None, :] * fr[:, None]
             disp = np.zeros_like(Zg)
-            # (le mètre sous le bord du toit : gouttières, bandeau de rive, corniche de neige ; pas le mur)
-            sj = okp & (ej == j) & (fz < ztp - 1.0)
-            if sj.any() and ncut[j] >= 2 and nvr >= 2:
+            sj = okp & (ej == j) & (fz < ztp - 1.0) if len(okp) else np.zeros(0, bool)
+            # (mur levé au-dessus du vide : plat ; ses coupes n'ont pas la même hauteur, la grille du relief s'y plierait)
+            if not opts['plat'] and sj.any() and ncut[j] >= 2 and nvr >= 2 and not leve[j].any():
                 pw = np.c_[fx[sj], fy[sj]] - W[j]
                 u = pw @ wd
-                e = pw @ nrm[j]  # écart au plan du mur (+ vers l'extérieur)
+                e = pw @ nrm[j]
                 inu = (u > -GRILLE) & (u < wl + GRILLE)
                 z0 = float(np.min(zg))
                 Dm = _carte_relief(u[inu], fz[sj][inu], e[inu], wl, z0, float(np.max(ztop)))
@@ -728,9 +1054,9 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None):
                                                  'zg': zg, 'ztop': ztop, 'W0': W[j], 'W1': W[(j + 1) % Lp], 'n': nrm[j]})
                 uu = (f * wl)[None, :].repeat(nvr + 1, 0)
                 disp = _bilin(Dm, uu / GRILLE, (Zg - z0) / GRILLE)
-                disp[0, :] = 0.0  # haut : raccord à la sous-face
-                disp[-1, :] = 0.0  # pied (sous le sol)
-                disp[:, 0] = 0.0  # coins : communs aux deux murs voisins
+                disp[0, :] = 0.0
+                disp[-1, :] = 0.0
+                disp[:, 0] = 0.0
                 disp[:, -1] = 0.0
             XY = Wj[None, :, :] + disp[:, :, None] * nrm[j][None, None, :]
             P3 = np.c_[XY.reshape(-1, 2), Zg.reshape(-1)]
@@ -739,14 +1065,136 @@ def batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz, stats=None):
             a0 = (rr * nc_ + cc).ravel()
             tri = np.r_[np.c_[a0, a0 + nc_, a0 + nc_ + 1], np.c_[a0, a0 + nc_ + 1, a0 + 1]]
             if not disp.any():
-                # mur plat : une bande (haut, pied) suffit ; les coupes du haut restent (raccord à la sous-face)
                 P3 = np.r_[np.c_[Wj, ztop], np.c_[Wj, zg]]
                 kk = ncut[j] + 1
                 i = np.arange(kk - 1)
                 tri = np.r_[np.c_[i, kk + i, kk + i + 1], np.c_[i, kk + i + 1, i + 1]]
-            st['triangles_murs'] += len(tri)
-            add(P3, tri, True)
-    if not V:
+            # (pied au ras du haut : quadrilatères écrasés écartés)
+            a, b_, c_ = P3[tri[:, 0]], P3[tri[:, 1]], P3[tri[:, 2]]
+            tri = tri[np.linalg.norm(np.cross(b_ - a, c_ - a), axis=1) > 1e-6]
+            tri_murs += len(tri)
+            add(P3, tri, True, MUR)
+        info['triangles_murs'] = tri_murs
+        # ---- DESSOUS : surface tournée vers le bas, du pied des murs aux hauteurs libres mesurées à l'intérieur
+        nlev = int(sum(int(lv.sum()) for lv in leve))
+        info['colonnes_levees'] = nlev
+        if nlev:
+            BW = np.concatenate([Wjs[j][:-1] for j in range(Lp)])
+            zBW = np.concatenate([zgs[j][:-1] for j in range(Lp)])
+            ny_, nx_ = m.shape
+            gx_, gy_ = np.meshgrid(X0 + np.arange(nx_) * CELL, Y0 + np.arange(ny_) * CELL)
+            pin = points_in_poly(np.c_[gx_.ravel(), gy_.ravel()], W).reshape(ny_, nx_)
+            ri_, ci_ = np.nonzero(pin)
+            pts = np.c_[gx_[ri_, ci_], gy_[ri_, ci_]]
+            if len(pts):
+                dd = shapely.distance(shapely.points(pts), LinearRing(W))
+                kp = dd > 0.3
+                ri_, ci_, pts = ri_[kp], ci_[kp], pts[kp]
+            zin = sol_z(pts[:, 0], pts[:, 1]) - 0.5 if len(pts) else np.zeros(0)
+            if zfield is not None and len(pts):
+                zf_ = zfield[ri_, ci_]
+                zin = np.where(np.isfinite(zf_), np.maximum(zf_, zin), zin)
+                zin = np.minimum(zin, zr[ir_m[ri_, ci_], ic_m[ri_, ci_]] - POUTRE)
+            tri_d, P2d, kd = _toit(BW, pts)
+            if len(tri_d):
+                Zd = np.r_[zBW, zin[kd]]
+                add(np.c_[P2d, Zd], tri_d[:, [0, 2, 1]], True, DESSOUS)  # (tourné vers le bas)
+                info['dessous'] = True
+                info['triangles_dessous'] = len(tri_d)
+        if not V:
+            return None
+        info['types'] = np.array(K, np.int8)
+        return np.array(V, np.float64), np.array(T, np.int64), np.array(M, bool), info
+
+    for k in range(1, n + 1):
+        box = sl[k - 1]
+        if box is None:
+            continue
+        r0, r1 = max(0, box[0].start - 3), min(ny, box[0].stop + 3)
+        c0, c1 = max(0, box[1].start - 3), min(nx, box[1].stop + 3)
+        m = lab[r0:r1, c0:c1] == k
+        if m.sum() < 32:  # < 8 m²
+            continue
+        tk = np.where(m, t[r0:r1, c0:c1], -1e9)
+        if not (tk > -1e8).any():
+            continue
+        st['batiments'] += 1
+        zr, plab, plans, pente, zmes = pans(tk, m)
+        mes = m & (tk > -1e8)
+        zhi = ndimage.maximum_filter(np.where(mes, tk, -1e9), 5)
+        zlo = ndimage.minimum_filter(np.where(mes, tk, 1e9), 5)
+        zhi = np.where(zhi > -1e8, zhi, zr)
+        zlo = np.where(zlo < 1e8, zlo, zr)
+        cs = find_contours(np.pad(m, 1).astype(float), 0.5)
+        if not cs:
+            continue
+        cont = max(cs, key=len)[:-1] - 1
+        C = np.c_[cont[:, 1], cont[:, 0]] * CELL
+        if 0.5 * np.sum(C[:, 0] * np.roll(C[:, 1], -1) - np.roll(C[:, 0], -1) * C[:, 1]) < 0:
+            C, cont = C[::-1], cont[::-1]
+        if len(C) < 4:
+            continue
+        bord = (cont[:, 1] + c0 < 0.75) | (cont[:, 0] + r0 < 0.75) | (cont[:, 1] + c0 > nx - 1.75) | (cont[:, 0] + r0 > ny - 1.75)
+        Vr, dp = regularise(C, bord=bord)
+        X0 = ex0 + (c0 + 0.5) * CELL
+        Y0 = ey0 + (r0 + 0.5) * CELL
+        prep = (r0, r1, c0, c1, m, tk, zr, plab, plans, pente, zmes, zhi, zlo, C, bord, Vr, dp, X0, Y0)
+
+        def sol_local(X, Y, _o=np.array([X0, Y0, 0.0])):
+            return sol_z(X + _o[0], Y + _o[1])
+
+        def dans_local(X, Y, _o=np.array([X0, Y0, 0.0])):
+            return (X + _o[0] > ex0 + 1) & (X + _o[0] < ex1 - 1) & (Y + _o[1] > ey0 + 1) & (Y + _o[1] < ey1 - 1)
+
+        res = None
+        raisons_tot = []
+        opts = {'plat': False, 'simple': False, 'mesure': False}
+        for essai in range(4):
+            r_ = construit(k, opts, prep)
+            if r_ is None:
+                break
+            Vb, Tb, Mb, info = r_
+            # (repère décalé : précision des calculs de contrôle)
+            Vl = Vb - np.array([X0, Y0, 0.0])
+            j_ = _juge(Vl, Tb, Mb, info['types'], sol_local, info.get('ecart_toit', np.zeros(0)), dans_local)
+            raisons = _echoue(j_, opts)
+            if res is None or len(raisons) < len(res[4]):
+                res = (Vb, Tb, Mb, info, raisons, dict(opts), j_)
+            nouveaux = {rp for _, rp in raisons if rp}
+            if not nouveaux:
+                break
+            raisons_tot.append((_nom(opts), [r for r, _ in raisons], {a: b for a, b in j_.items() if a != 'triangles'}))
+            for o in nouveaux:
+                opts[o] = True
+        if res is None:
+            continue
+        Vb, Tb, Mb, info, raisons, opts_, j_ = res
+        nom = _nom(opts_)
+        st['niveaux'][nom] = st['niveaux'].get(nom, 0) + 1
+        st['replis'] += nom != 'complet'
+        for r_, _ in raisons:
+            st['defauts_restants'][r_] = st['defauts_restants'].get(r_, 0) + 1
+        st['regularises'] += bool(info.get('regularise'))
+        st['murs'] += info.get('murs', 0)
+        st['murs_mesures'] += info.get('murs_mesures', 0)
+        st['retraits'].extend(info.get('retraits', []))
+        st['points_facade'] += info.get('points_facade', 0)
+        st['points_facade_bruts'] += info.get('points_facade_bruts', 0)
+        st['triangles_murs'] += info.get('triangles_murs', 0)
+        st['avec_dessous'] += bool(info.get('dessous'))
+        st['colonnes_levees'] += info.get('colonnes_levees', 0)
+        st['rayons_libres'] += info.get('rayons', 0)
+        cen = Vb.mean(0)
+        st['par_batiment'].append({'k': int(k), 'ou': [round(float(v), 1) for v in cen], 'niveau': nom,
+                                   'replis': [list(x) for x in raisons_tot], 'dessous': bool(info.get('dessous')),
+                                   **j_})
+        Vg.append(Vb)
+        Tg.append(Tb + nvg[0])
+        Mg.append(Mb)
+        Kg.append(info['types'])
+        nvg[0] += len(Vb)
+    if not Vg:
         return np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros(0, bool)
-    V = np.array(V, np.float64) - np.array([ox, oy, oz])
-    return V, np.array(T, np.int64), np.array(M, bool)
+    V = np.concatenate(Vg) - np.array([ox, oy, oz])
+    st['types_triangles'] = np.concatenate(Kg)
+    return V, np.concatenate(Tg), np.concatenate(Mg)
