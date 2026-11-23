@@ -24,6 +24,12 @@
 # 4 quater. Écartés enfin (22/11 au soir) : les PETITS câbles (moins de 8 échos, tous dans le quart du haut), une couronne
 #    à moins de 35 % d'échos multiples (dès 8 échos), et un sommet sur une PAROI (sol de plus de 50°). Bloc d'une paroi sous
 #    l'Aiguille du Fruit : 29 → 0 ; bloc des remontées de la Saulire : 64 → 4 ; forêt dense : 3 430 → 3 416.
+# 4 quinquies (23/11/2026, chantier 5 d'Edgar : « les pylônes pris pour des sapins ») : PYLÔNE = sommet de 8 m ou plus
+#    dont presque tous les échos sont en haut (moins de 20 % au milieu de la hauteur, moins de 40 % sous les trois quarts).
+# 4 sexies (23/11/2026) : ESSENCE d'après la BD Forêt V2 de l'IGN (Licence Ouverte ; type de peuplement de chaque parcelle :
+#    « sapin ou épicéa », « mélèze pur », « pin à crochets ou cembro pur », conifères en îlots, landes…), la forme de la
+#    couronne ne départageant plus qu'à l'intérieur d'un peuplement mélangé. Avant, la forme seule rangeait en mélèzes
+#    beaucoup d'épicéas larges : avec les mélèzes nus de novembre, la forêt paraissait à moitié morte.
 # 5. Teinte : lue au rendu sur la photo (pas à la fabrication).
 #
 # Sortie : <sortie>/16_<x>_<y>.arb : en-tête JSON (1 ligne) puis, par arbre, x, y (repère de la tuile z12, m vrais),
@@ -47,6 +53,64 @@ SEUIL_IRC = -0.15
 PENTE_MAX = 50.0
 LUM_IRC = 70.0
 Z_IRC = 18  # (~0,42 m par pixel à Courchevel)
+PYLONE_MIL = 0.2
+PYLONE_BAS = 0.4
+
+
+def bd_foret(x14, y14, dossier):
+    """Peuplements de la BD Forêt V2 (IGN) sur la tuile z14 (et 60 m autour) : liste de (code_tfv, anneaux en Lambert 93).
+    Gardés dans <dossier>/bdforet (partagés entre les blocs de la tuile). [] si le service ne répond pas."""
+    import urllib.request
+    os.makedirs(os.path.join(dossier, 'bdforet'), exist_ok=True)
+    fn = os.path.join(dossier, 'bdforet', f'14_{x14}_{y14}.json')
+    if not os.path.exists(fn):
+        c = [tile_lonlat(14, x14 + i, y14 + j) for i in (0, 1) for j in (0, 1)]
+        L = np.array([TO_L93.transform(lo, la) for lo, la in c])
+        (a, b), (cx, dy) = L.min(0) - 60, L.max(0) + 60
+        u = ('https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature'
+             '&TYPENAMES=LANDCOVER.FORESTINVENTORY.V2:formation_vegetale&OUTPUTFORMAT=application/json&COUNT=5000'
+             '&SRSNAME=urn:ogc:def:crs:EPSG::2154'
+             f'&BBOX={a},{b},{cx},{dy},urn:ogc:def:crs:EPSG::2154')
+        data = None
+        for essai in range(3):
+            try:
+                data = urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0 (relief-hd)'}), timeout=60).read()
+                json.loads(data)
+                break
+            except Exception:
+                data = None
+                time.sleep(3 + 5 * essai)
+        if data is None:
+            return []
+        tmp = fn + f'.{os.getpid()}.part'
+        open(tmp, 'wb').write(data)
+        os.replace(tmp, fn)
+    out = []
+    for f in json.load(open(fn, encoding='utf-8')).get('features', []):
+        g = f.get('geometry') or {}
+        polys = [g['coordinates']] if g.get('type') == 'Polygon' else g.get('coordinates', []) if g.get('type') == 'MultiPolygon' else []
+        rings = [np.asarray(r, np.float64)[:, :2] for poly in polys for r in poly]
+        out.append((f['properties'].get('code_tfv') or '', rings))
+    return out
+
+
+def peuplement(X, Y, parcelles):
+    """Code du peuplement (BD Forêt) sous chaque point (Lambert 93) : '' hors parcelle. Règle pair-impair sur tous les
+    anneaux d'une parcelle (les trous comptent)."""
+    code = np.array([''] * len(X), dtype=object)
+    for c, rings in parcelles:
+        inside = np.zeros(len(X), bool)
+        for r in rings:
+            x0, y0 = r[:-1, 0], r[:-1, 1]
+            x1, y1 = r[1:, 0], r[1:, 1]
+            for k in range(len(x0)):
+                cond = (y0[k] > Y) != (y1[k] > Y)
+                if not cond.any():
+                    continue
+                xi = x0[k] + (Y - y0[k]) * (x1[k] - x0[k]) / ((y1[k] - y0[k]) or 1e-12)
+                inside ^= cond & (X < xi)
+        code[inside & (code == '')] = c
+    return code
 
 
 def indice_vegetation(mx, my, rayon_m, k, dossier):
@@ -204,6 +268,7 @@ def main():
     dbg = []  # (ARBRES_DEBUG=1 : chaque sommet, ses mesures et sa décision, dans 16_x_y.debug.npy)
     suspendus = 0
     paroi = 0
+    pylones = 0
     un_echo = 0
     ecartes = []  # (contrôle : ARBRES_ECARTES=1 les écrit à côté, en Lambert 93)
     trees = []
@@ -225,6 +290,14 @@ def main():
         if pente[r_, c_] > PENTE_MAX:
             paroi += 1
             ecartes.append(('paroi', ex0 + (c_ + 0.5) * CELL, ey0 + (r_ + 0.5) * CELL, h, float(pente[r_, c_])))
+            continue
+        # PYLÔNE (4 quinquies) : presque tous ses points en haut (traverse, poulies), un mât maigre dessous. Mesuré le 23/11
+        # sur 3 blocs des remontées (pylônes d'OpenStreetMap pour la vérification seulement) : part des points au milieu de
+        # la hauteur 3 à 14 % (arbres 43 à 59 %), sous les trois quarts 10 à 28 % (arbres plus de 65 %) ; 13 pylônes sur 13
+        # écartés, aucun des 2 185 arbres. (Règle de forme essayée d'abord : 56 à 78 vrais arbres écartés en forêt dense.)
+        if h >= 8 and nb[i + 1] >= 30 and nmil[i + 1] < PYLONE_MIL * nb[i + 1] and nbas[i + 1] < PYLONE_BAS * nb[i + 1]:
+            pylones += 1
+            ecartes.append(('pylone', ex0 + (c_ + 0.5) * CELL, ey0 + (r_ + 0.5) * CELL, h, float(nmil[i + 1] / nb[i + 1])))
             continue
         rad = math.sqrt(max(area[i], 0.25) / math.pi)
         rad = min(rad, 0.55 * h + 0.5)
@@ -260,14 +333,37 @@ def main():
     # bas de vallée. Quand rien ne tranche : épicéa. (À affiner avec la BD Forêt V2 de l'IGN, essence par parcelle.)
     ratio = out[:, 4] / np.maximum(out[:, 3], 0.1)
     alt = out[:, 2]
-    nature = np.zeros(len(out), np.uint8)
-    nature[(ratio >= 0.22) & (alt >= 1450)] = 1
-    nature[(ratio >= 0.42) & (alt >= 1750)] = 2
-    nature[(ratio >= 0.3) & (alt < 1450)] = 3
-    nature[out[:, 3] < 3] = 4
     rng = np.random.default_rng(x16 * 100003 + y16)
     graine = rng.integers(0, 256, len(T), dtype=np.uint8)
-    head = {'z': 16, 'x': x16, 'y': y16, 'arbres': int(len(T)), 'epiceas': int((nature == 0).sum()), 'meleze': int((nature == 1).sum()),
+    tirage = rng.random(len(T))
+    # forme seule (hors parcelle, peuplements mélangés) : comme avant
+    forme = np.zeros(len(out), np.uint8)
+    forme[(ratio >= 0.22) & (alt >= 1450)] = 1
+    forme[(ratio >= 0.42) & (alt >= 1750)] = 2
+    forme[(ratio >= 0.3) & (alt < 1450)] = 3
+    nature = forme.copy()
+    parcelles = [] if os.environ.get('ARBRES_SANS_BDFORET') else bd_foret(x16 >> 2, y16 >> 2, dossier)
+    code = peuplement(T[:, 0], T[:, 1], parcelles) if len(T) and parcelles else np.array([''] * len(T), dtype=object)
+    c_ = code.astype(str)
+    # (« pur » dans la BD Forêt : 75 % au moins de l'essence ; les autres arbres de la parcelle gardent leur forme, mais
+    # seulement s'ils la marquent nettement)
+    pur_epicea = np.char.startswith(c_, 'FF2G61')
+    pur_meleze = np.char.startswith(c_, 'FF2-63')
+    pur_pin = np.char.startswith(c_, 'FF2G58') | np.char.startswith(c_, 'FF2-81') | np.char.startswith(c_, 'FF2G51')
+    feuillus = np.char.startswith(c_, 'FF1') | np.char.startswith(c_, 'FO1')
+    nature[pur_epicea] = np.where((tirage[pur_epicea] < 0.18) & (forme[pur_epicea] != 0), forme[pur_epicea], 0)
+    nature[pur_meleze] = np.where((tirage[pur_meleze] < 0.2) & (forme[pur_meleze] != 1), 0, 1)
+    nature[pur_pin] = np.where((tirage[pur_pin] < 0.2) & (forme[pur_pin] != 2), 0, 2)
+    nature[feuillus] = np.where((tirage[feuillus] < 0.15) & (alt[feuillus] >= 1450), 0, 3)
+    # peuplements mélangés de conifères (îlots, forêt ouverte, mélanges) : la forme, mais un mélèze ou un cembro doit la
+    # marquer franchement (sinon épicéa, l'essence la plus courante de la zone)
+    melange = np.char.startswith(c_, 'FF2-00') | np.char.startswith(c_, 'FO2') | np.char.startswith(c_, 'FF32')
+    nature[melange & (forme == 1) & (ratio < 0.3)] = 0
+    # hors forêt (landes, prés, arbres isolés) : la forme, sans changement
+    nature[out[:, 3] < 3] = 4
+    essences = {k: int(v) for k, v in zip(*np.unique(c_[c_ != ''], return_counts=True))} if len(c_) else {}
+    head = {'z': 16, 'x': x16, 'y': y16, 'arbres': int(len(T)), 'pylones': pylones, 'peuplements': essences,
+            'epiceas': int((nature == 0).sum()), 'meleze': int((nature == 1).sum()),
             'pins': int((nature == 2).sum()), 'feuillus': int((nature == 3).sum()), 'buissons': int((nature == 4).sum()),
             'ecartes_suspendus': suspendus, 'ecartes_un_echo': un_echo, 'ecartes_paroi': paroi, 'ecartes_infrarouge': roche, 'infrarouge_manquant': irc_manque, 'carres_illisibles': illisibles,
             'hauteur_mediane': round(float(np.median(out[:, 3])) if len(T) else 0, 1),
