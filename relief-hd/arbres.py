@@ -94,6 +94,64 @@ def bd_foret(x14, y14, dossier):
     return out
 
 
+CABLE_COULOIR = 5.0  # m de part et d'autre de l'axe d'une remontée : couloir dégagé (aucun arbre)
+
+
+def cables(x14, y14, dossier):
+    """Axes des remontées mécaniques de la BD TOPO (IGN, transport_par_cable) sur la tuile z14 et 400 m autour : liste de
+    tableaux (n, 2) en Lambert 93. Gardés dans <dossier>/cables. [] si le service ne répond pas.
+    (23/11/2026 au soir, Edgar : « en dessous des remontées mécaniques… de la végétation incohérente ») : les échos des
+    câbles, des cabines et des sièges passaient encore pour des arbres là où le profil des échos ne tranche pas ; sous une
+    remontée, le couloir est dégagé en vrai : rien n'y est gardé."""
+    import urllib.request
+    os.makedirs(os.path.join(dossier, 'cables'), exist_ok=True)
+    fn = os.path.join(dossier, 'cables', f'14_{x14}_{y14}.json')
+    if not os.path.exists(fn):
+        c = [tile_lonlat(14, x14 + i, y14 + j) for i in (0, 1) for j in (0, 1)]
+        L = np.array([TO_L93.transform(lo, la) for lo, la in c])
+        (a, b), (cx, dy) = L.min(0) - 400, L.max(0) + 400
+        u = ('https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature'
+             '&TYPENAMES=BDTOPO_V3:transport_par_cable&OUTPUTFORMAT=application/json&COUNT=5000'
+             '&SRSNAME=urn:ogc:def:crs:EPSG::2154'
+             f'&BBOX={a},{b},{cx},{dy},urn:ogc:def:crs:EPSG::2154')
+        data = None
+        for essai in range(3):
+            try:
+                data = urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0 (relief-hd)'}), timeout=60).read()
+                json.loads(data)
+                break
+            except Exception:
+                data = None
+                time.sleep(3 + 5 * essai)
+        if data is None:
+            return []
+        tmp = fn + f'.{os.getpid()}.part'
+        open(tmp, 'wb').write(data)
+        os.replace(tmp, fn)
+    out = []
+    for f in json.load(open(fn, encoding='utf-8')).get('features', []):
+        g = f.get('geometry') or {}
+        lines = [g['coordinates']] if g.get('type') == 'LineString' else g.get('coordinates', []) if g.get('type') == 'MultiLineString' else []
+        out += [np.asarray(l, np.float64)[:, :2] for l in lines if len(l) >= 2]
+    return out
+
+
+def pres_cable(X, Y, lignes, d=CABLE_COULOIR):
+    """Points (Lambert 93) à moins de d m de l'axe d'une remontée."""
+    m = np.zeros(len(X), bool)
+    for l in lignes:
+        for (ax, ay), (bx, by) in zip(l[:-1], l[1:]):
+            vx, vy = bx - ax, by - ay
+            L2 = vx * vx + vy * vy
+            if L2 < 1e-6:
+                continue
+            if X.min() > max(ax, bx) + d or X.max() < min(ax, bx) - d or Y.min() > max(ay, by) + d or Y.max() < min(ay, by) - d:
+                continue
+            t = np.clip(((X - ax) * vx + (Y - ay) * vy) / L2, 0, 1)
+            m |= (X - ax - t * vx) ** 2 + (Y - ay - t * vy) ** 2 < d * d
+    return m
+
+
 def peuplement(X, Y, parcelles):
     """Code du peuplement (BD Forêt) sous chaque point (Lambert 93) : '' hors parcelle. Règle pair-impair sur tous les
     anneaux d'une parcelle (les trous comptent)."""
@@ -331,6 +389,13 @@ def main():
     # forme mesurée (rayon de couronne / hauteur) et l'altitude : à Courchevel, presque tout est conifère au-dessus de
     # 1 400 m (épicéa et sapin étroits, mélèze plus large, cembro rond et trapu vers la limite de la forêt) ; feuillus en
     # bas de vallée. Quand rien ne tranche : épicéa. (À affiner avec la BD Forêt V2 de l'IGN, essence par parcelle.)
+    sous_cable = 0
+    if len(T) and not os.environ.get('ARBRES_SANS_CABLES'):
+        lignes = cables(x16 >> 2, y16 >> 2, dossier)
+        if lignes:
+            pc = pres_cable(T[:, 0], T[:, 1], lignes)
+            sous_cable = int(pc.sum())
+            out = out[~pc]; T = T[~pc]
     ratio = out[:, 4] / np.maximum(out[:, 3], 0.1)
     alt = out[:, 2]
     rng = np.random.default_rng(x16 * 100003 + y16)
@@ -365,7 +430,7 @@ def main():
     head = {'z': 16, 'x': x16, 'y': y16, 'arbres': int(len(T)), 'pylones': pylones, 'peuplements': essences,
             'epiceas': int((nature == 0).sum()), 'meleze': int((nature == 1).sum()),
             'pins': int((nature == 2).sum()), 'feuillus': int((nature == 3).sum()), 'buissons': int((nature == 4).sum()),
-            'ecartes_suspendus': suspendus, 'ecartes_un_echo': un_echo, 'ecartes_paroi': paroi, 'ecartes_infrarouge': roche, 'infrarouge_manquant': irc_manque, 'carres_illisibles': illisibles,
+            'ecartes_suspendus': suspendus, 'ecartes_un_echo': un_echo, 'ecartes_paroi': paroi, 'ecartes_infrarouge': roche, 'ecartes_sous_cable': sous_cable, 'infrarouge_manquant': irc_manque, 'carres_illisibles': illisibles,
             'hauteur_mediane': round(float(np.median(out[:, 3])) if len(T) else 0, 1),
             'secondes': round(time.time() - T0, 1)}
     os.makedirs(sortie, exist_ok=True)
