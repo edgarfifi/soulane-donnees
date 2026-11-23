@@ -1648,9 +1648,9 @@ function concat(parts) {
   }
   return out;
 }
-function simplify(v, tri, error) {
+function simplify(v, tri, error, lock = false) {
   if (tri.length === 0) return tri;
-  return MeshoptSimplifier.simplify(tri, v.pos, 3, 0, error, ["ErrorAbsolute"])[0];
+  return MeshoptSimplifier.simplify(tri, v.pos, 3, 0, error, lock ? ["ErrorAbsolute", "LockBorder", "Sparse"] : ["ErrorAbsolute"])[0];
 }
 function compact(v, tri) {
   const map = new Int32Array(v.ao.length).fill(-1);
@@ -1901,17 +1901,17 @@ function partial(blocDir, outDir, x14, y14) {
           for (let i = 0; i < 2; i++) {
             const x18 = x17 * 2 + i;
             const y18 = y17 * 2 + j;
-            const sl = simplify(b2.v, byLeaf[(y18 - y16 * 4) * 4 + (x18 - x16 * 4)], MESH_LEVEL_ERROR[6]);
+            const sl = simplify(b2.v, byLeaf[(y18 - y16 * 4) * 4 + (x18 - x16 * 4)], MESH_LEVEL_ERROR[6], true);
             w.emit(18, x18, y18, b2.v, sl, MESH_LEVEL_ERROR[6]);
             leaves.push(sl);
           }
         }
-        const s17 = simplify(b2.v, concat(leaves), MESH_LEVEL_ERROR[5]);
+        const s17 = simplify(b2.v, concat(leaves), MESH_LEVEL_ERROR[5], true);
         w.emit(17, x17, y17, b2.v, s17, MESH_LEVEL_ERROR[5]);
         parts17.push(s17);
       }
     }
-    const s16 = simplify(b2.v, concat(parts17), MESH_LEVEL_ERROR[4]);
+    const s16 = simplify(b2.v, concat(parts17), MESH_LEVEL_ERROR[4], true);
     w.emit(16, x16, y16, b2.v, s16, MESH_LEVEL_ERROR[4]);
     process.stdout.write(`  bloc ${x16}/${y16} : ${(b2.tri.length / 3 / 1e6).toFixed(2)} M triangles \u2192 ${(s16.length / 3 / 1e3).toFixed(0)} k au z16
 `);

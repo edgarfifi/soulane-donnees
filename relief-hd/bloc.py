@@ -99,49 +99,84 @@ def lire(dossier, x0, y0, x1, y1):
     return {k: np.concatenate(v) for k, v in cols.items()}
 
 
-def close_holes(mesh, max_edges):
-    V = np.asarray(mesh.vertices)
-    T = np.asarray(mesh.triangles)
-    # Arêtes de bord ORIENTÉES (sens du triangle) : celles dont l'arête opposée n'existe pas.
+def boucles_de_bord(T):
+    """Boucles de bord d'un maillage (triangles T) : arêtes ORIENTÉES (sens de leur triangle) dont l'arête opposée n'existe
+    pas, enchaînées en boucles SIMPLES. Un sommet de degré 4 (deux trous qui se touchent en un point, boucle en huit) a
+    deux arêtes de bord sortantes : la marche garde chaque arête une seule fois et, dès qu'elle repasse par un sommet déjà
+    sur son chemin, détache la boucle simple ainsi fermée (23/11/2026 : la version d'avant ne suivait que la première
+    arête sortante et abandonnait toute boucle qui repassait par un sommet : ces trous restaient ouverts).
+    Rend (boucles fermées (listes de sommets), nombre d'arêtes de bord restées en chemin ouvert)."""
     e = np.r_[T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]].astype(np.int64)
-    n = len(V)
+    n = int(T.max()) + 1 if len(T) else 0
     key = e[:, 0] * n + e[:, 1]
     rev = e[:, 1] * n + e[:, 0]
     border = e[~np.isin(key, rev)]
-    if not len(border):
-        return mesh
     nxt = {}
     for a, b in border:
         nxt.setdefault(int(a), []).append(int(b))
-    seen = set()
-    newV, newT = [], []
+    loops = []
+    ouvertes = 0
     for a0 in list(nxt.keys()):
-        if a0 in seen:
+        while nxt.get(a0):
+            path = [a0]
+            pos = {a0: 0}
+            cur = a0
+            while True:
+                nb = nxt.get(cur)
+                if not nb:  # (chemin ouvert : arête partagée par plus de deux triangles, bord incohérent)
+                    ouvertes += len(path) - 1
+                    break
+                cur = nb.pop()
+                if cur in pos:  # boucle simple fermée : de la première visite de cur jusqu'ici
+                    i = pos[cur]
+                    loops.append(path[i:])
+                    for v in path[i + 1:]:
+                        del pos[v]
+                    path = path[: i + 1]
+                    if cur == a0 and len(path) == 1:
+                        break
+                    continue
+                pos[cur] = len(path)
+                path.append(cur)
+    return loops, ouvertes
+
+
+def close_holes(mesh, max_edges, stats=None):
+    """Bouche les TROUS (boucles de bord de moins de max_edges arêtes), en éventail depuis leur centre. Un trou se
+    reconnaît à son sens : son aire vectorielle (arêtes orientées) est opposée à la normale des triangles qui le bordent ;
+    le bord extérieur d'un morceau (bord du bloc, petit morceau isolé, pièce collée par un seul sommet) va dans le sens de
+    sa surface et reste ouvert."""
+    V = np.asarray(mesh.vertices)
+    T = np.asarray(mesh.triangles)
+    if not len(T):
+        return mesh
+    loops, ouvertes = boucles_de_bord(T)
+    # normale (non normalisée) des triangles, sommée par sommet : sens de la surface autour d'une boucle
+    fn = np.cross(V[T[:, 1]] - V[T[:, 0]], V[T[:, 2]] - V[T[:, 0]])
+    vn = np.zeros_like(V)
+    for k in range(3):
+        np.add.at(vn, T[:, k], fn)
+    newV, newT = [], []
+    n = len(V)
+    nb_trous = nb_complexes = 0
+    for loop in loops:
+        if len(loop) < 3 or len(loop) > max_edges:
             continue
-        loop = [a0]
-        seen.add(a0)
-        cur = a0
-        ok = False
-        for _ in range(max_edges + 1):
-            nb = nxt.get(cur)
-            if not nb:
-                break
-            cur = nb[0]
-            if cur == a0:
-                ok = True
-                break
-            if cur in seen:
-                break
-            seen.add(cur)
-            loop.append(cur)
-        if not ok or len(loop) < 3 or len(loop) > max_edges:
+        P = V[loop]
+        c = P.mean(0)
+        Q = P - c
+        aire = 0.5 * np.cross(Q, np.roll(Q, -1, 0)).sum(0)
+        if float(aire @ vn[loop].sum(0)) >= 0:  # (bord extérieur d'un morceau)
             continue
-        c = V[loop].mean(0)
+        nb_trous += 1
+        nb_complexes += len(set(loop)) < len(loop)
         ci = n + len(newV)
         newV.append(c)
         # Le trou se ferme dans le sens INVERSE du bord (les triangles bordent le trou de l'autre côté).
         for i in range(len(loop)):
             newT.append((loop[(i + 1) % len(loop)], loop[i], ci))
+    if stats is not None:
+        stats.update({'boucles': len(loops), 'trous_bouches': nb_trous, 'aretes_ouvertes': ouvertes})
     if not newV:
         return mesh
     V2 = np.r_[V, np.array(newV)]
@@ -192,6 +227,16 @@ def main():
         if n > 0: head[int(s)] = (vx / n, vy / n)
     # Eau (classe 9) : surface des lacs, gardée comme le sol.
     keep |= c == 9
+    # ESSAI (BATI_POISSON=1, 22/11/2026, Edgar : « comment Relief Maps a ses bâtiments en relief sans paroi verticale ? ») :
+    # les points des bâtiments (classe 6) reconstruits AVEC le sol, comme la roche, au lieu des murs extrudés de batiments.py.
+    bati_poisson = os.environ.get('BATI_POISSON') == '1'
+    if bati_poisson:
+        keep |= c == 6
+    # ESSAI (ARBRES_MAILLAGE=1, 22/11/2026, Edgar : « faire exactement comme Relief Maps ») : la végétation moyenne et haute
+    # (classes 4, 5) reconstruite AVEC le sol : chaque arbre devient un volume du relief, à sa vraie taille, visible de loin
+    # comme le reste du maillage (au lieu des arbres posés un par un).
+    if os.environ.get('ARBRES_MAILLAGE') == '1':
+        keep |= (c == 4) | (c == 5)
     ox, oy, oz = (ex0 + ex1) / 2, (ey0 + ey1) / 2, float(np.median(z[keep]))
     P = np.c_[x[keep] - ox, y[keep] - oy, z[keep] - oz]
     ang, ps = d['ang'][keep], d['ps'][keep]
@@ -248,7 +293,8 @@ def main():
     # Trous intérieurs (paroi sans écho, rognée) bouchés : boucles de bord de moins de 800 arêtes, fermées en éventail
     # depuis leur centre (le bord du bloc, bien plus long, reste ouvert). Contrôle du 22/11 : des taches de ciel au
     # travers d'une paroi du couloir A6. (PyMeshLab le faisait aussi, mais en 18 min par bloc.)
-    mesh = close_holes(mesh, 800)
+    trous = {}
+    mesh = close_holes(mesh, 800, trous)
     # 4 ter. BÂTIMENTS (batiments.py) : murs droits et toits mesurés, ajoutés à la surface du bloc (le sol passe dessous,
     # interpolé). Leurs murs sont marqués (canopée = 253) : le moteur les teinte en neutre.
     from scipy.interpolate import LinearNDInterpolator as _LI
@@ -265,7 +311,10 @@ def main():
             zz[bad] = NearestNDInterpolator(gsrc[:, :2], gsrc[:, 2])(X[bad] - ox, Y[bad] - oy)
         return zz + oz
 
-    BV, BT, BM = batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz)
+    if bati_poisson:
+        BV, BT, BM = np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros(0, bool)
+    else:
+        BV, BT, BM = batiments(x, y, z, c, sol_z, ex0, ey0, ex1, ey1, ox, oy, oz)
     n_bat_v = len(BV)
     n_tri_sol = len(mesh.triangles)  # (triangles du sol ; ceux des bâtiments suivent)
     if n_bat_v:
@@ -351,7 +400,7 @@ def main():
     head_json = {
         'z': 16, 'x': x16, 'y': y16, 'x12': x12, 'y12': y12, 'k': k, 'latc': latc,
         'emprise': [float(cx0), float(cy0), float(cx1), float(cy1)],
-        'version': 2, 'sommets': int(len(W)), 'triangles': int(len(T)), 'batiments_sommets': int(n_bat_v), 'points': int(len(P)), 'points_ajoutes': int(n_fill), 'raide': round(raide, 4), 'profondeur': depth,
+        'version': 2, 'sommets': int(len(W)), 'triangles': int(len(T)), 'batiments_sommets': int(n_bat_v), 'points': int(len(P)), 'points_ajoutes': int(n_fill), 'raide': round(raide, 4), 'profondeur': depth, 'trous': trous,
         'secondes': {a: round(b, 1) for a, b in chrono.items()} | {'total': round(time.time() - T0, 1)}
     }
     os.makedirs(sortie, exist_ok=True)
