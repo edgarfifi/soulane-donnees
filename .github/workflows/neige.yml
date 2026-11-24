@@ -4,6 +4,8 @@
 # fraîche des prochaines 24 et 48 heures selon l'altitude (outils/neige.mjs : la logique de l'app) et la publie dans la
 # branche « neige-prevue » de ce dépôt, remplacée à chaque fois (aucun historique qui grossit). soulane.app la relaie telle
 # quelle (/donnees/neige-prevue/), sans reconstruire le site. Dépôt public : minutes gratuites.
+# Lancé surtout par le Cron de Vercel de soulane.app (api/robot-neige.mjs, chaque heure, seulement s'il y a une nouvelle
+# prévision) : le planning ci-dessous, gardé en secours, part avec des heures de retard dans ce dépôt (mesuré le 24/11/2026).
 # Fichier tenu dans le dépôt de l'app Soulane (scripts/soulane-donnees/), envoyé ici par scripts/pistes-outil.mjs --publier.
 name: Neige prévue
 

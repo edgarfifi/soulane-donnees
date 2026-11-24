@@ -141,8 +141,9 @@ référence (0 à 4 800 m, tous les 300 m), telle que la montre le calque « Nei
 - **Version publiée** : branche [`neige-prevue`](https://github.com/edgarfifi/soulane-donnees/tree/neige-prevue), remplacée à
   chaque prévision : `neige.bin.gz` (format décrit dans `src/shared/core/snowForecast.ts` du dépôt de l'app) et
   `manifeste.json` (prévision, fenêtres, taille, empreinte, contrôle).
-- **Mise à jour** : chaque heure, le robot ([`.github/workflows/neige.yml`](.github/workflows/neige.yml)) regarde si
-  Météo-France a publié une nouvelle prévision AROME (une toutes les 3 heures) ; si oui, il la lit
+- **Mise à jour** : chaque heure, soulane.app regarde si Météo-France a publié une nouvelle prévision AROME (une toutes les
+  3 heures) et, si oui, lance le robot ([`.github/workflows/neige.yml`](.github/workflows/neige.yml), qui a aussi son propre
+  planning, en secours) ; il la lit
   ([`outils/neige-extraire.py`](outils/neige-extraire.py)), calcule la neige ([`outils/neige.mjs`](outils/neige.mjs)) et la
   publie, sauf si les chiffres sont suspects.
 - **Méthode** : précipitation et part solide (neige et grésil) de chaque heure selon AROME sur son propre relief, ramenées à
