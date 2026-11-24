@@ -4,7 +4,7 @@
 #
 #   python bloc.py <x16> <y16> <dossier des dalles> <dossier de sortie> [--force]
 #
-# 1. Points : sol (classe 2), eau (9), tablier des ponts (17) + points non classés (1) à moins de 2 m d'un point du sol (la roche des parois n'est pas
+# 1. Points : sol (classe 2), eau (9), tablier des ponts (17), sursol pérenne (64, hors pylônes) + points non classés (1) à moins de 2 m d'un point du sol (la roche des parois n'est pas
 #    toute classée « sol » : 57 % des points sous les surplombs sont « non classés », mesuré le 21/11). Végétation,
 #    bâtiments, sursol : écartés (arbres et bâtiments ont leurs propres produits).
 # 2. Normales orientées vers le CAPTEUR : une face n'est vue que de son côté avant. Le cap de chaque ligne de vol vient
@@ -316,6 +316,28 @@ def main():
     # tablier sur ce pont, jetés jusque-là). PONTS=0 : sans.
     if os.environ.get('PONTS', '1') == '1':
         keep |= c == 17
+    # SURSOL PÉRENNE (classe 64 : gares, plateformes, structures fixes) reconstruit avec le sol (24/11/2026, Edgar : « on n'a
+    # pas la gare d'arrivée de la Saulire » ; 5 557 points autour de la gare, de 2 671 à 2 715 m ; essai validé par Edgar).
+    # SAUF les pylônes et les câbles des remontées (dessinés à part, remontees.py) : points à moins de 6 m de l'axe d'une
+    # remontée de la BD TOPO et à plus de 40 m de ses deux bouts (les gares restent). SURSOL=0 : sans.
+    if os.environ.get('SURSOL', '1') == '1':
+        s64 = np.nonzero(c == 64)[0]
+        if len(s64):
+            garde = np.ones(len(s64), bool)
+            try:
+                from arbres import cables, pres_cable
+                lignes = cables(x16 >> 2, y16 >> 2, dossier)
+                if lignes:
+                    X64, Y64 = x[s64], y[s64]
+                    pres = pres_cable(X64, Y64, lignes, 6.0)
+                    bout = np.zeros(len(s64), bool)
+                    for l in lignes:
+                        for e in (l[0], l[-1]):
+                            bout |= (X64 - e[0]) ** 2 + (Y64 - e[1]) ** 2 < 40.0 ** 2
+                    garde = ~(pres & ~bout)
+            except Exception as e:  # (service des remontées muet : structures gardées)
+                print('remontées indisponibles pour le sursol', e, flush=True)
+            keep[s64[garde]] = True
     # ESSAI (BATI_POISSON=1, 22/11/2026, Edgar : « comment Relief Maps a ses bâtiments en relief sans paroi verticale ? ») :
     # les points des bâtiments (classe 6) reconstruits AVEC le sol, comme la roche, au lieu des murs extrudés de batiments.py.
     # BATI_POISSON=2 (« surface unique, toits posés », 23/11/2026, Edgar devant Relief Maps : « la surface est bien
