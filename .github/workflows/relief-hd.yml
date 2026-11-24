@@ -14,6 +14,10 @@ on:
         description: "Seulement les arbres (après une retouche de arbres.py : minutes au lieu d'heures)"
         type: boolean
         default: false
+      parallele:
+        description: "Blocs calculés en même temps par machine (1 pour une tuile qui a manqué de mémoire)"
+        type: string
+        default: '2'
 
 permissions:
   contents: read
@@ -75,6 +79,7 @@ jobs:
       - name: Fabriquer la tuile ${{ matrix.tuile }}
         env:
           TUILE: ${{ matrix.tuile }}
+          RELIEF_PARALLELE: ${{ inputs.parallele || '2' }}
         run: |
           set -euo pipefail
           X=${TUILE%/*}; Y=${TUILE#*/}
