@@ -1,0 +1,88 @@
+# Refait la « Neige prévue » de Soulane à chaque nouvelle prévision AROME de Météo-France (une toutes les 3 heures, publiée
+# 3 à 5 heures plus tard ; Licence Ouverte 2.0) : regarde chaque heure s'il y en a une nouvelle (quelques secondes sinon),
+# la lit (outils/neige-extraire.py : ≈ 530 Mo de fichiers GRIB2, gardés seulement le temps de les lire), calcule la neige
+# fraîche des prochaines 24 et 48 heures selon l'altitude (outils/neige.mjs : la logique de l'app) et la publie dans la
+# branche « neige-prevue » de ce dépôt, remplacée à chaque fois (aucun historique qui grossit). soulane.app la relaie telle
+# quelle (/donnees/neige-prevue/), sans reconstruire le site. Dépôt public : minutes gratuites.
+# Fichier tenu dans le dépôt de l'app Soulane (scripts/soulane-donnees/), envoyé ici par scripts/pistes-outil.mjs --publier.
+name: Neige prévue
+
+on:
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+    inputs:
+      forcer:
+        description: 'Refaire même si la prévision publiée est déjà la dernière'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: neige
+  cancel-in-progress: false
+
+jobs:
+  neige:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Installer la lecture des fichiers GRIB2 (eccodes)
+        run: pip install --quiet eccodes numpy
+
+      - name: Y a-t-il une nouvelle prévision ?
+        id: quoi
+        run: |
+          run=$(python3 -I outils/neige-extraire.py --derniere)
+          publie=$(curl -fsS "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/neige-prevue/manifeste.json" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("prevision",""))' 2>/dev/null || true)
+          echo "Dernière prévision complète : ${run:-aucune} ; publiée : ${publie:-aucune}"
+          if [ -z "$run" ]; then
+            echo "::warning::Aucune prévision AROME complète trouvée (Météo-France en retard ?) : la précédente reste en ligne."
+          elif [ "$run" = "$publie" ] && [ "${{ inputs.forcer }}" != "true" ]; then
+            echo "Rien de nouveau."
+          else
+            echo "run=$run" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v7
+        if: steps.quoi.outputs.run
+        with:
+          node-version: 24
+
+      - name: Lire la prévision et calculer la neige
+        if: steps.quoi.outputs.run
+        run: |
+          python3 -I outils/neige-extraire.py extrait --run "${{ steps.quoi.outputs.run }}"
+          node outils/neige.mjs extrait sortie
+          rm -rf extrait
+
+      - name: Publier (branche neige-prevue, remplacée)
+        if: steps.quoi.outputs.run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd sortie
+          git init -q -b neige-prevue
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add neige.bin.gz manifeste.json
+          git commit -q -m "Neige prévue : prévision AROME du ${{ steps.quoi.outputs.run }}"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:neige-prevue
+          echo "Publiée : $(cat manifeste.json | tr -d '\n' | head -c 400)"
+
+      - name: Garder le planning actif
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # GitHub coupe le planning d'un dépôt public sans activité depuis 60 jours (les autres robots commitent leur état
+        # chaque semaine) : on le réactive à chaque passage.
+        run: gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/neige.yml/enable" || true

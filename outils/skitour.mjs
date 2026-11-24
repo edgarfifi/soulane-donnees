@@ -38,7 +38,27 @@ var ENTITIES = {
   ucirc: String.fromCharCode(251),
   icirc: String.fromCharCode(238),
   euml: String.fromCharCode(235),
-  iuml: String.fromCharCode(239)
+  iuml: String.fromCharCode(239),
+  // 23/11/2026 (textes des gestionnaires d'espaces protégés, Biodiv'Sports) : lettres encore laissées en « &ugrave; »…
+  ugrave: String.fromCharCode(249),
+  oacute: String.fromCharCode(243),
+  aacute: String.fromCharCode(225),
+  uuml: String.fromCharCode(252),
+  ouml: String.fromCharCode(246),
+  oelig: String.fromCharCode(339),
+  euro: String.fromCharCode(8364),
+  bull: String.fromCharCode(8226),
+  minus: String.fromCharCode(8722),
+  // … et les CAPITALES (« &Eacute; » donnait « é ») : cherchées telles quelles avant la minuscule.
+  Eacute: String.fromCharCode(201),
+  Egrave: String.fromCharCode(200),
+  Ecirc: String.fromCharCode(202),
+  Agrave: String.fromCharCode(192),
+  Acirc: String.fromCharCode(194),
+  Ccedil: String.fromCharCode(199),
+  Ocirc: String.fromCharCode(212),
+  Icirc: String.fromCharCode(206),
+  OElig: String.fromCharCode(338)
 };
 function decodeHtmlEntities(s) {
   return s.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (m, e) => {
@@ -46,7 +66,7 @@ function decodeHtmlEntities(s) {
       const code = e[1] === "x" || e[1] === "X" ? Number.parseInt(e.slice(2), 16) : Number.parseInt(e.slice(1), 10);
       return Number.isFinite(code) && code > 0 && code <= 1114111 && !(code >= 55296 && code <= 57343) ? String.fromCodePoint(code) : m;
     }
-    return ENTITIES[e.toLowerCase()] ?? m;
+    return ENTITIES[e] ?? ENTITIES[e.toLowerCase()] ?? m;
   });
 }
 

@@ -131,8 +131,29 @@ l'emprise.
   informatif, sans valeur réglementaire ; elle ne couvre pas toute la montagne. Avant tout usage, lire son guide
   d'utilisation et sa légende sur [avalanches.fr](https://www.avalanches.fr/donnees-publiques-clpa/).
 
+## Neige prévue (prochaines 24 et 48 heures)
+
+Grille de la neige fraîche prévue sur la France, les Alpes et les Pyrénées (grille de 0,025°, environ 2,5 km), pour les
+prochaines 24 et 48 heures, selon l'altitude : pour chaque case, la hauteur de neige fraîche (cm) à 17 altitudes de
+référence (0 à 4 800 m, tous les 300 m), telle que la montre le calque « Neige prévue » de l'app
+[Soulane](https://soulane.app), qui la lit à l'altitude de chaque point de son relief.
+
+- **Version publiée** : branche [`neige-prevue`](https://github.com/edgarfifi/soulane-donnees/tree/neige-prevue), remplacée à
+  chaque prévision : `neige.bin.gz` (format décrit dans `src/shared/core/snowForecast.ts` du dépôt de l'app) et
+  `manifeste.json` (prévision, fenêtres, taille, empreinte, contrôle).
+- **Mise à jour** : chaque heure, le robot ([`.github/workflows/neige.yml`](.github/workflows/neige.yml)) regarde si
+  Météo-France a publié une nouvelle prévision AROME (une toutes les 3 heures) ; si oui, il la lit
+  ([`outils/neige-extraire.py`](outils/neige-extraire.py)), calcule la neige ([`outils/neige.mjs`](outils/neige.mjs)) et la
+  publie, sauf si les chiffres sont suspects.
+- **Méthode** : précipitation et part solide (neige et grésil) de chaque heure selon AROME sur son propre relief, ramenées à
+  chaque altitude par la température humide (« wet-bulb ») et son gradient vertical ; densité de la neige fraîche selon la
+  température de l'air (Hedstrom et Pomeroy, 1998) ; ni tassement ni fonte au sol. Une prévision, pas une mesure.
+- **Source et licence** : prévisions du modèle AROME de [Météo-France](https://meteo.data.gouv.fr), réutilisées sous la
+  [Licence Ouverte 2.0](https://www.etalab.gouv.fr/licence-ouverte-open-licence/) (Etalab) ; données modifiées (calcul de la
+  neige selon l'altitude). Cette grille est mise à disposition sous la même licence.
+
 Les fichiers de ce dépôt sont tenus dans le dépôt de l'app Soulane (`scripts/soulane-donnees/`) ; `outils/pistes.mjs`,
-`outils/skirando.mjs`, `outils/sentiers.mjs`, `outils/skitour.mjs`, `outils/transports.mjs` et `outils/clpa.mjs` y sont générés à partir du code de l'app : ne pas les
+`outils/skirando.mjs`, `outils/sentiers.mjs`, `outils/skitour.mjs`, `outils/transports.mjs`, `outils/clpa.mjs` et `outils/neige.mjs` y sont générés à partir du code de l'app : ne pas les
 modifier ici.
 
 ## Relief HD : maillages 3D du LiDAR HD (outil de fabrication)
