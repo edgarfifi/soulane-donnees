@@ -91,7 +91,7 @@ def requete(r, bounds):
     entier (blocs vides, trous de 430 m dans le relief). La lecture normale d'abord (même résultat qu'avant pour toutes
     les dalles saines) ; si elle échoue, la dalle est relue morceau par morceau (nœuds de l'octree COPC) et seuls les
     morceaux illisibles sont sautés : le relief y est un peu moins dense, sans trou (chaque niveau de l'octree couvre
-    toute la surface)."""
+    toute la surface). Un morceau aux valeurs absurdes est sauté aussi."""
     try:
         return r.query(bounds), 0
     except Exception:
@@ -99,13 +99,23 @@ def requete(r, bounds):
     from laspy.copc import load_octree_for_query
     b3 = bounds.ensure_3d(r.header.mins, r.header.maxs)
     noeuds = load_octree_for_query(r.source, r.copc_info, r.root_page, query_bounds=b3, level_range=None)
+    # Un morceau peut aussi se décompresser SANS erreur mais en valeurs absurdes (24/11/2026 : 1 sur 677 dans le bloc
+    # 33960/23468, heures GPS de 1e-316 à 1e244 ; le calcul du cap des lignes de vol plantait) : écarté lui aussi.
+    hmin = r.header.mins - 1
+    hmax = r.header.maxs + 1
     bons = []
     for n in noeuds:
         try:
-            r._fetch_and_decompress_points_of_nodes([n])
-            bons.append(n)
+            q = r._fetch_and_decompress_points_of_nodes([n])
         except Exception:
-            pass
+            continue
+        gt = np.asarray(q.gps_time)
+        xyz = (np.asarray(q.x), np.asarray(q.y), np.asarray(q.z))
+        sain = len(q) == n.point_count and np.isfinite(gt).all() and (np.abs(gt) < 1e10).all()
+        for k in range(3):
+            sain = sain and bool(((xyz[k] >= hmin[k]) & (xyz[k] <= hmax[k])).all())
+        if sain:
+            bons.append(n)
     p = r._fetch_and_decompress_points_of_nodes(bons)
     # (même filtre que CopcReader.query de laspy 2.7)
     mins = np.round((b3.mins - r.header.offsets) / r.header.scales).astype(np.int32)
@@ -145,6 +155,10 @@ def caps(d):
     x, y = d['x'], d['y']
     for s in np.unique(d['ps']):
         m = d['ps'] == s
+        # (24/11/2026 : un point de la dalle abîmée 0977_6486 a une heure GPS au signe inversé, à 22 ans des autres ; seul,
+        # il imposait sa pente à la régression. Les points à plus d'une semaine de l'heure médiane de leur ligne sont écartés :
+        # aucun dans une dalle saine.)
+        m &= np.abs(d['gt'] - np.median(d['gt'][m])) < 7 * 86400
         if m.sum() < 1000: continue
         t = d['gt'][m] - d['gt'][m].mean()
         if np.ptp(t) <= 0: continue
