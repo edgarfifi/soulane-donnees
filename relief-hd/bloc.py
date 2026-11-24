@@ -83,6 +83,39 @@ def dalle(dossier, X, Y):
     return None
 
 
+def requete(r, bounds):
+    """Points d'une dalle COPC dans `bounds`, et le nombre de morceaux illisibles sautés.
+
+    24/11/2026 : la dalle 0977_6486 de l'IGN a un morceau illisible (« failed to fill whole buffer », fichier complet
+    pourtant, déjà vu par arbres.py le 22/11). Avec la marge de 60 m, 15 blocs autour l'atteignaient : ils échouaient en
+    entier (blocs vides, trous de 430 m dans le relief). La lecture normale d'abord (même résultat qu'avant pour toutes
+    les dalles saines) ; si elle échoue, la dalle est relue morceau par morceau (nœuds de l'octree COPC) et seuls les
+    morceaux illisibles sont sautés : le relief y est un peu moins dense, sans trou (chaque niveau de l'octree couvre
+    toute la surface)."""
+    try:
+        return r.query(bounds), 0
+    except Exception:
+        pass
+    from laspy.copc import load_octree_for_query
+    b3 = bounds.ensure_3d(r.header.mins, r.header.maxs)
+    noeuds = load_octree_for_query(r.source, r.copc_info, r.root_page, query_bounds=b3, level_range=None)
+    bons = []
+    for n in noeuds:
+        try:
+            r._fetch_and_decompress_points_of_nodes([n])
+            bons.append(n)
+        except Exception:
+            pass
+    p = r._fetch_and_decompress_points_of_nodes(bons)
+    # (même filtre que CopcReader.query de laspy 2.7)
+    mins = np.round((b3.mins - r.header.offsets) / r.header.scales).astype(np.int32)
+    maxs = np.round((b3.maxs - r.header.offsets) / r.header.scales).astype(np.int32)
+    garde = ((mins[0] <= p.X) & (p.X <= maxs[0]) & (mins[1] <= p.Y) & (p.Y <= maxs[1])
+             & (mins[2] <= p.Z) & (p.Z <= maxs[2]))
+    p.array = p.array[garde].copy()
+    return p, len(noeuds) - len(bons)
+
+
 def lire(dossier, x0, y0, x1, y1):
     cols = {k: [] for k in ('x', 'y', 'z', 'c', 'ang', 'ps', 'gt')}
     for X in range(int(x0 // 1000), int(x1 // 1000) + 1):
@@ -92,7 +125,9 @@ def lire(dossier, x0, y0, x1, y1):
                 print('DALLE ABSENTE', X, Y, flush=True)
                 continue
             with laspy.CopcReader.open(fn) as r:
-                p = r.query(Bounds(mins=np.array([x0, y0]), maxs=np.array([x1, y1])))
+                p, sautes = requete(r, Bounds(mins=np.array([x0, y0]), maxs=np.array([x1, y1])))
+            if sautes:
+                print('dalle', X, Y, 'abîmée :', sautes, 'morceaux illisibles sautés', flush=True)
             if len(p) == 0:
                 continue
             cols['x'].append(np.asarray(p.x)); cols['y'].append(np.asarray(p.y)); cols['z'].append(np.asarray(p.z))

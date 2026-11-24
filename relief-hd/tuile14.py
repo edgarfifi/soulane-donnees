@@ -36,6 +36,7 @@ def main():
         # comptés réussis) ; les lignes des dalles ratées sont gardées dans le journal.
         vide = last.startswith('aucun point')
         e = {'bloc': f'{x16}/{y16}', 'secondes': round(time.time() - t), 'bloc_ok': r.returncode == 0 and not vide, 'arbres_ok': r2.returncode == 0, 'fin': last,
+             'code': r.returncode,
              'dalles': [l[:300] for l in lignes if l.startswith('dalle') or l.startswith('DALLE')][:8],
              'erreur': (r.stderr.strip().splitlines() or [''])[-1][:300] if r.returncode else ''}
         print(json.dumps(e, ensure_ascii=False), flush=True)
@@ -61,7 +62,13 @@ def main():
             shutil.copy(os.path.join(travail, f), sortie)
     with open(os.path.join(sortie, f'14_{x14}_{y14}.journal.json'), 'w', encoding='utf-8') as f:
         json.dump({'tuile': f'{x14}/{y14}', 'secondes': round(time.time() - T0), 'blocs': journal, 'paquet_ok': r.returncode == 0}, f, ensure_ascii=False, indent=1)
-    if r.returncode or not any(b['bloc_ok'] for b in journal):
+    # Tuile en ÉCHEC dès qu'un bloc a planté ou qu'une dalle n'a pas pu être téléchargée (24/11/2026 : 16 blocs ratés,
+    # dont un tué faute de mémoire sans un mot, dans 5 tuiles comptées réussies ; leur relief aurait eu des trous de
+    # 430 m). Un bloc vide alors que toutes ses dalles sont là (hors de la couverture du LiDAR) reste admis.
+    rates = [b['bloc'] for b in journal if not b['bloc_ok'] and (b['code'] != 0 or any(l.startswith('DALLE ABSENTE') for l in b['dalles']))]
+    if rates:
+        print('BLOCS RATÉS :', ' '.join(rates), flush=True)
+    if r.returncode or rates or not any(b['bloc_ok'] for b in journal):
         sys.exit(1)
 
 

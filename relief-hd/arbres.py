@@ -43,7 +43,7 @@ from skimage.segmentation import watershed
 from pyproj import Transformer
 
 sys.path.insert(0, os.path.dirname(__file__))
-from bloc import tile_lonlat, dalle, R_EARTH  # noqa: E402
+from bloc import tile_lonlat, dalle, requete, R_EARTH  # noqa: E402
 
 TO_L93 = Transformer.from_crs(4326, 2154, always_xy=True)
 TO_WGS = Transformer.from_crs(2154, 4326, always_xy=True)
@@ -246,18 +246,17 @@ def main():
                 continue
             # Lue par 4 × 4 carrés (22/11/2026) : la dalle 0977_6486 de l'IGN a un morceau illisible (« failed to fill whole
             # buffer », fichier complet pourtant) ; une seule lecture d'un coup faisait échouer les arbres de 4 tuiles entières.
-            # Un carré illisible est sauté (ses arbres manquent), les autres sont gardés.
+            # Un carré illisible est relu morceau par morceau (24/11/2026, `requete` de bloc.py : seuls les morceaux de
+            # l'octree illisibles sont sautés ; avant, le carré entier, et le bloc 33960/23468 n'avait plus d'arbres).
             qx = np.linspace(ex0, ex1, 5); qy = np.linspace(ey0, ey1, 5)
             with laspy.CopcReader.open(fn) as r:
                 for a_ in range(4):
                     for b_ in range(4):
                         # (bornes demi-ouvertes : un point au bord n'est lu qu'une fois)
                         x0_, x1_, y0_, y1_ = qx[a_], qx[a_ + 1], qy[b_], qy[b_ + 1]
-                        try:
-                            p = r.query(Bounds(mins=np.array([x0_, y0_]), maxs=np.array([x1_, y1_])))
-                        except Exception as e:
-                            illisibles.append(f'{X}_{Y}:{a_}{b_}')
-                            continue
+                        p, sautes = requete(r, Bounds(mins=np.array([x0_, y0_]), maxs=np.array([x1_, y1_])))
+                        if sautes:
+                            illisibles.append(f'{X}_{Y}:{a_}{b_}:{sautes}')
                         if not len(p):
                             continue
                         px_ = np.asarray(p.x); py_ = np.asarray(p.y)
