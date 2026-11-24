@@ -1,0 +1,54 @@
+# Miroir Sentinel-2 de la « Neige vue par satellite » du Relief HD (24/11/2026) : lit à l'avance, dans les COG publics
+# d'Earth Search (Copernicus Sentinel-2, données libres), les bandes que l'app lira sur la zone du Relief HD pour les dates
+# qu'elle proposera, et les range en petits blocs (outils/neige-s2.mjs ; format : shared/core/s2Mirror.ts du dépôt de
+# l'app). Publié dans la version FIXE « neige-s2 » de ce dépôt (jamais « Latest ») : l'ordi n'y lit que les blocs de sa
+# fenêtre au lieu de 25 Mo en Oregon. Chaque fichier est relu et comparé à la lecture directe du COG avant d'être publié ;
+# seules les scènes NOUVELLES sont envoyées, celles qui ne servent plus sont retirées. Dépôt public : minutes gratuites,
+# GITHUB_TOKEN suffit. Fichier tenu dans le dépôt de l'app Soulane (scripts/soulane-donnees/), envoyé ici par
+# scripts/neige-s2/outil.mjs --publier (ce fichier et l'outil SEULEMENT).
+name: Neige vue par satellite (miroir Sentinel-2)
+
+on:
+  # (Lancé à la main tant que la première fabrication n'est pas vérifiée ; ensuite chaque jour, cf. docs/neige-s2.md.)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: neige-s2
+  cancel-in-progress: false
+
+jobs:
+  miroir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Version publiée
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p sortie
+          gh release download neige-s2 --pattern manifeste.json --output publie.json 2>/dev/null || echo "Aucune version publiée."
+
+      - name: Lire les bandes et fabriquer les fichiers des scènes
+        run: node outils/neige-s2.mjs sortie publie.json
+
+      - name: Publier
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view neige-s2 >/dev/null 2>&1 || gh release create neige-s2 --latest=false \
+            --title "Neige vue par satellite : miroir Sentinel-2 (Relief HD)" \
+            --notes "Bandes Sentinel-2 L2A (B03, B04, B11, SCL) de la zone du Relief HD, en blocs, pour l'app Soulane. Contient des données Copernicus Sentinel modifiées. Fabriqué par le workflow neige-s2.yml."
+          # Les scènes nouvelles, puis le manifeste (il ne nomme que des fichiers déjà en ligne), puis le ménage.
+          while IFS= read -r f; do [ -n "$f" ] && gh release upload neige-s2 "sortie/$f" --clobber; done < sortie/nouveaux.txt
+          gh release upload neige-s2 sortie/manifeste.json --clobber
+          while IFS= read -r f; do [ -n "$f" ] && gh release delete-asset neige-s2 "$f" --yes || true; done < sortie/retires.txt
+          echo "Publié : $(wc -l < sortie/nouveaux.txt) nouveaux fichiers, $(wc -l < sortie/retires.txt) retirés."
