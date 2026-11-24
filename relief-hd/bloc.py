@@ -4,7 +4,7 @@
 #
 #   python bloc.py <x16> <y16> <dossier des dalles> <dossier de sortie> [--force]
 #
-# 1. Points : sol (classe 2) + points non classés (1) à moins de 2 m d'un point du sol (la roche des parois n'est pas
+# 1. Points : sol (classe 2), eau (9), tablier des ponts (17) + points non classés (1) à moins de 2 m d'un point du sol (la roche des parois n'est pas
 #    toute classée « sol » : 57 % des points sous les surplombs sont « non classés », mesuré le 21/11). Végétation,
 #    bâtiments, sursol : écartés (arbres et bâtiments ont leurs propres produits).
 # 2. Normales orientées vers le CAPTEUR : une face n'est vue que de son côté avant. Le cap de chaque ligne de vol vient
@@ -311,6 +311,11 @@ def main():
     head = caps(d)
     # Eau (classe 9) : surface des lacs, gardée comme le sol.
     keep |= c == 9
+    # Ponts (classe 17, « tablier de pont » de l'IGN) : gardés comme le sol (24/11/2026, Edgar, devant Relief Maps : le pont
+    # de la route au-dessus de la piste de Courchevel 1650 manquait, « chez eux la route est continue » ; 3 367 points de
+    # tablier sur ce pont, jetés jusque-là). PONTS=0 : sans.
+    if os.environ.get('PONTS', '1') == '1':
+        keep |= c == 17
     # ESSAI (BATI_POISSON=1, 22/11/2026, Edgar : « comment Relief Maps a ses bâtiments en relief sans paroi verticale ? ») :
     # les points des bâtiments (classe 6) reconstruits AVEC le sol, comme la roche, au lieu des murs extrudés de batiments.py.
     # BATI_POISSON=2 (« surface unique, toits posés », 23/11/2026, Edgar devant Relief Maps : « la surface est bien
