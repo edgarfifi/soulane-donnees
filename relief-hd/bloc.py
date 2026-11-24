@@ -27,7 +27,11 @@ from scipy.spatial import cKDTree
 from pyproj import Transformer
 
 R_EARTH = 6378137.0
-MARGE = 25.0
+# Marge autour du bloc (m) : 60 m depuis le 24/11/2026 (25 m avant). Deux blocs voisins reconstruisaient chacun à sa façon
+# ce qui chevauche leur limite (immeubles coupés en deux à Courchevel 1550, falaises) ; à 60 m, ils voient les mêmes
+# bâtiments entiers et la même roche : ouverture sur la limite de l'immeuble de 1550 de 317 → 144 m² (contrôle
+# coutures.mjs), temps de calcul ~+30 %.
+MARGE = float(os.environ.get('MARGE', '60'))
 o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
 TO_L93 = Transformer.from_crs(4326, 2154, always_xy=True)
 TO_WGS = Transformer.from_crs(2154, 4326, always_xy=True)
