@@ -9,7 +9,10 @@
 name: Neige vue par satellite (miroir Sentinel-2)
 
 on:
-  # (Lancé à la main tant que la première fabrication n'est pas vérifiée ; ensuite chaque jour, cf. docs/neige-s2.md.)
+  schedule:
+    # Chaque jour à 15 h 23 (UTC) : les passages du matin (vers 10 h 30) sont alors au catalogue d'Earth Search. Seules les
+    # scènes nouvelles sont lues et envoyées (première fabrication vérifiée le 24/11/2026 : run 45431423403).
+    - cron: '23 15 * * *'
   workflow_dispatch:
 
 permissions:
