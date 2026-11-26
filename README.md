@@ -3,8 +3,15 @@
 ## Pistes de ski de la carte d'hiver
 
 Tuiles vectorielles (MVT, couche `pistes`, zooms 10 à 14) des pistes de ski, de ski de randonnée, de ski nordique, de
-raquettes et de luge des Alpes, des Pyrénées, du Jura, des Vosges, du Massif central et de la Corse, telles que les
+raquettes et de luge des Alpes, des Pyrénées, du Jura, des Vosges, du Massif central, de la Corse, des Carpates et des
+Balkans (de 2,5° O à 30° E, de 41° N à 49,5° N), telles que les
 dessinent les cartes de l'app [Soulane](https://soulane.app).
+
+Avec les tuiles, un fichier `departs.json` : les gares d'arrivée des remontées d'où part un hors-piste, une piste non
+damée ou un itinéraire à ski d'OpenStreetMap, un itinéraire du réseau de ski de randonnée ou un topo Skitour (nom de la
+gare, altitude lue sur le relief Terrarium, liste des départs par leur nom et leur référence : aucune géométrie des
+sources officielles n'y est copiée). Et, en France et en Suisse, les parties des itinéraires `skitour` d'OpenStreetMap
+que la source officielle (réseau de ski de randonnée, itinéraires de swisstopo) ne montre pas déjà, marquées `hs`.
 
 - **Dernière version** : [`pistes.tar.gz`](https://github.com/edgarfifi/soulane-donnees/releases/latest/download/pistes.tar.gz)
   (fichiers `z/x/y.pbf`) et son [`manifeste.json`](https://github.com/edgarfifi/soulane-donnees/releases/latest/download/manifeste.json)

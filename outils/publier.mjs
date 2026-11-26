@@ -53,7 +53,12 @@ export const SKI_RELEASE = 'skirando'
 export const SKI_KEEP = 3
 
 const pct = (a, b) => `${a >= b ? '+' : '−'}${((Math.abs(a - b) / Math.max(1, b)) * 100).toFixed(1)} %`
-const gap = (a, b) => Math.abs(a - b) / Math.max(1, b)
+/** La région `next` contient-elle `prev` en étant plus grande ? ({ west, south, east, north }) */
+export function regionGrew(prev, next) {
+  if (!prev || !next) return false
+  const inside = next.west <= prev.west && next.south <= prev.south && next.east >= prev.east && next.north >= prev.north
+  return inside && (next.west < prev.west || next.south < prev.south || next.east > prev.east || next.north > prev.north)
+}
 
 /**
  * Décision PURE (pistes) à partir du manifeste précédent (null : première fois) et du neuf.
@@ -68,6 +73,10 @@ export function compareManifests(prev, next, limits = LIMITS) {
   if (next.pistes < limits.minPistes) errors.push(`Seulement ${next.pistes} pistes (au moins ${limits.minPistes} attendues).`)
   for (const z of next.zooms) if (!(next.tuiles[z]?.tuiles > 0)) errors.push(`Aucune tuile au zoom ${z}.`)
   if (prev && typeof prev.pistes === 'number') {
+    // Région AGRANDIE depuis la fois précédente (26/11/2026 : Carpates et Balkans) : les comptes montent, c'est voulu ;
+    // seule une BAISSE reste une anomalie. La fois suivante, les deux régions sont les mêmes : contrôle complet.
+    const grew = regionGrew(prev.region, next.region)
+    const gap = (a, b) => (grew && a >= b ? 0 : Math.abs(a - b) / Math.max(1, b))
     if (gap(next.pistes, prev.pistes) > limits.pistes) errors.push(`${next.pistes} pistes contre ${prev.pistes} la fois précédente (${pct(next.pistes, prev.pistes)}).`)
     // Remontées mécaniques (dans les tuiles depuis le 20/10/2026) : comparées quand les deux fabrications les comptent.
     if (typeof prev.remontees === 'number' && typeof next.remontees === 'number' && gap(next.remontees, prev.remontees) > limits.pistes) {

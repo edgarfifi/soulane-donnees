@@ -51,9 +51,30 @@ jobs:
           ls -l planet_pistes.osm.gz
           echo "Fichier du : $DATE"
 
+      # Départs depuis les remontées et itinéraires à ski sans doublon (26/11/2026) : le robot croise les pistes avec le
+      # réseau officiel de ski de rando et les topos Skitour, pris dans les dernières versions de CE dépôt. Facultatif :
+      # si cette étape échoue, les tuiles sont faites quand même, sans ces deux parties pour la France.
+      - name: Réseau de ski de rando et topos Skitour (versions de ce dépôt)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for S in skirando skitour; do
+            mkdir -p "officiel/$S"
+            gh release download "$S" --repo "$GITHUB_REPOSITORY" --pattern manifeste.json --dir "officiel/$S"
+            A=$(node -e "console.log(JSON.parse(require('fs').readFileSync('officiel/$S/manifeste.json','utf8')).archive)")
+            gh release download "$S" --repo "$GITHUB_REPOSITORY" --pattern "$A" --dir officiel
+            tar -xzf "officiel/$A" -C "officiel/$S"
+            rm "officiel/$A"
+          done
+          ls officiel/skirando | head; ls -l officiel/skitour/index.json
+
       - name: Fabriquer les tuiles
         env:
           PISTES_SOURCE_DATE: ${{ steps.source.outputs.date }}
+          PISTES_SKIRANDO: officiel/skirando
+          PISTES_SKITOUR: officiel/skitour/index.json
         run: node --max-old-space-size=8192 outils/pistes.mjs planet_pistes.osm.gz tuiles
 
       - name: Vérifier puis publier
