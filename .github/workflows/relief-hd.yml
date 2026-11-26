@@ -47,7 +47,9 @@ jobs:
     timeout-minutes: 330
     strategy:
       fail-fast: false
-      max-parallel: 20
+      # 16 et non 20 (26/11/2026, pilote des 3 Vallées, de Tignes et de Val d'Isère) : les 20 places gratuites du compte
+      # sont partagées avec les robots de la neige (chaque heure), des pistes et des apps ; 4 restent libres pour eux.
+      max-parallel: 16
       matrix:
         tuile: ${{ fromJson(needs.liste.outputs.tuiles) }}
     steps:
