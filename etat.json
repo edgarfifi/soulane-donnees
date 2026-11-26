@@ -1,10 +1,10 @@
 {
- "verifie": "2026-11-23T16:13:22.829Z",
+ "verifie": "2026-11-26T18:22:49.239Z",
  "resultat": "publie",
- "pistes": 123741,
- "remontees": 11891,
- "tuiles": 32610,
- "source_date": "2026-11-23T03:33:47.000Z",
- "empreinte": "6df40dc1610c2e2848cf75c6d361e067df6c2d1b17fe7ea86c3ce6f76f7d77d3",
- "version": "pistes-20261123"
+ "pistes": 133472,
+ "remontees": 14080,
+ "tuiles": 38788,
+ "source_date": "2026-11-26T03:44:24.000Z",
+ "empreinte": "b6b9e2013161e451df804eade8e3a3f67b5b4272d242cddd63819a1ee2f8cde6",
+ "version": "pistes-20261126"
 }
