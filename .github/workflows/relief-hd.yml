@@ -72,9 +72,10 @@ jobs:
 
       - name: Accès aux dalles de l'IGN
         run: |
-          # Une dalle de Courchevel : code HTTP, taille et durée (le téléchargement échouait sans dire pourquoi).
+          # Une dalle de Courchevel : code HTTP, débit et durée (le téléchargement échouait sans dire pourquoi). 26/11/2026 : ses
+          # 4 premiers Mo seulement (avant : la dalle entière, ~150 Mo jetés à chaque tuile, ~1 To pour les stations de France).
           U='https://data.geopf.fr/telechargement/download/LiDARHD-NUALID/NUALHD_1-0__LAZ_LAMB93_QM_2025-02-20/LHD_FXX_0981_6483_PTS_LAMB93_IGN69.copc.laz'
-          curl -sS -L -o /dev/null -A 'Mozilla/5.0 (relief-hd)' -w 'code %{http_code} taille %{size_download} duree %{time_total}' "$U" || true
+          curl -sS -L -r 0-4194303 -o /dev/null -A 'Mozilla/5.0 (relief-hd)' -w 'code %{http_code} taille %{size_download} duree %{time_total}' "$U" || true
           echo
           curl -sS -I -A 'Mozilla/5.0 (relief-hd)' "$U" | head -20 || true
 

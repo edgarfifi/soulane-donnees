@@ -53,11 +53,48 @@ def bloc_ign(X, Y):
     return f'NUALHD_1-0__LAZ_LAMB93_{col}{lig}_{dates[col + lig]}'
 
 
+def url_dalle(dossier, X, Y):
+    """Adresse du nuage de points d'une dalle d'après le CATALOGUE des dalles du LiDAR HD de l'IGN (WFS de la Géoplateforme,
+    couche IGNF_LIDAR-HD_METADONNEE:metadata, champ url_npl), gardée dans <dossier>/catalogue. 26/11/2026 : bloc_ign() ne
+    connaît que les 4 blocs de diffusion autour de Courchevel ; partout ailleurs (stations de toute la France), l'adresse
+    était fausse. None : la dalle n'est pas (encore) dans le catalogue. Service muet : la table de Courchevel."""
+    nom = f'{X:04d}-{Y:04d}'
+    fc = os.path.join(dossier, 'catalogue', f'{X:04d}_{Y:04d}.json')
+    if os.path.exists(fc):
+        return json.load(open(fc)).get('url')
+    cx, cy = X * 1000 + 500, (Y - 1) * 1000 + 500
+    u = ('https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=IGNF_LIDAR-HD_METADONNEE:metadata'
+         '&OUTPUTFORMAT=application/json&COUNT=20&SRSNAME=urn:ogc:def:crs:EPSG::2154'
+         f'&BBOX={cx - 100},{cy - 100},{cx + 100},{cy + 100},urn:ogc:def:crs:EPSG::2154')
+    for essai in range(3):
+        try:
+            data = json.loads(urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0 (relief-hd)'}), timeout=60).read())
+            break
+        except Exception:
+            data = None
+            time.sleep(3 + 5 * essai)
+    if data is None:
+        return f'https://data.geopf.fr/telechargement/download/LiDARHD-NUALID/{bloc_ign(X, Y)}/LHD_FXX_{X:04d}_{Y:04d}_PTS_LAMB93_IGN69.copc.laz'
+    url = None
+    for f in data.get('features', []):
+        p = f.get('properties') or {}
+        if p.get('coordonnees_nw') == nom and p.get('url_npl'):
+            url = p['url_npl'].replace('http://', 'https://', 1)
+    os.makedirs(os.path.dirname(fc), exist_ok=True)
+    tmp = fc + f'.{os.getpid()}.part'
+    json.dump({'dalle': nom, 'url': url}, open(tmp, 'w'))
+    os.replace(tmp, fc)
+    return url
+
+
 def dalle(dossier, X, Y):
     fn = os.path.join(dossier, f'{X:04d}_{Y:04d}.copc.laz')
     if os.path.exists(fn) and os.path.getsize(fn) > 10000:
         return fn
-    url = f'https://data.geopf.fr/telechargement/download/LiDARHD-NUALID/{bloc_ign(X, Y)}/LHD_FXX_{X:04d}_{Y:04d}_PTS_LAMB93_IGN69.copc.laz'
+    url = url_dalle(dossier, X, Y)
+    if url is None:
+        print('dalle', X, Y, 'absente du catalogue du LiDAR HD', flush=True)
+        return None
     # (22/11/2026 : sur une machine neuve du cloud, le dossier n'existait pas ; chaque écriture échouait en silence.)
     os.makedirs(dossier, exist_ok=True)
     tmp = fn + f'.{os.getpid()}.part'  # (deux blocs en même temps peuvent demander la même dalle)
@@ -132,7 +169,13 @@ def lire(dossier, x0, y0, x1, y1):
         for Y in range(int(y0 // 1000) + 1, int(y1 // 1000) + 2):
             fn = dalle(dossier, X, Y)
             if not fn:
-                print('DALLE ABSENTE', X, Y, flush=True)
+                # (26/11/2026 : une dalle HORS du catalogue de l'IGN, au-delà d'une frontière ou en mer, n'est pas un échec : la
+                # tuile z12 d'une station frontalière déborde sur l'Italie ou la Suisse. « DALLE ABSENTE » fait échouer la tuile
+                # dans tuile14.py : seulement pour une dalle du catalogue qui n'a pas pu être téléchargée.)
+                if url_dalle(dossier, X, Y) is None:
+                    print('dalle', X, Y, 'hors du catalogue du LiDAR HD (frontière, mer) : sans points', flush=True)
+                else:
+                    print('DALLE ABSENTE', X, Y, flush=True)
                 continue
             with laspy.CopcReader.open(fn) as r:
                 p, sautes = requete(r, Bounds(mins=np.array([x0, y0]), maxs=np.array([x1, y1])))
@@ -243,6 +286,16 @@ def toits_semes(x, y, z, c, d, head, ex0, ey0, ex1, ey1, ox, oy, oz, pas=0.3, mu
     return R, RN, sc
 
 
+def memoire_max_mo():
+    """Pic de mémoire du processus (Mo, VmHWM de Linux) ; None ailleurs."""
+    try:
+        for l in open('/proc/self/status'):
+            if l.startswith('VmHWM:'):
+                return round(int(l.split()[1]) / 1024)
+    except OSError:
+        return None
+
+
 def boucles_de_bord(T):
     """Boucles de bord d'un maillage (triangles T) : arêtes ORIENTÉES (sens de leur triangle) dont l'arête opposée n'existe
     pas, enchaînées en boucles SIMPLES. Un sommet de degré 4 (deux trous qui se touchent en un point, boucle en huit) a
@@ -254,7 +307,12 @@ def boucles_de_bord(T):
     n = int(T.max()) + 1 if len(T) else 0
     key = e[:, 0] * n + e[:, 1]
     rev = e[:, 1] * n + e[:, 0]
-    border = e[~np.isin(key, rev)]
+    # (arête de bord : son arête opposée n'existe pas. 26/11/2026 : `np.isin` sur ~25 millions d'arêtes prenait 43 s sur un
+    # seul cœur et plus d'un Go ; tri puis recherche dichotomique : même ensemble, même ordre, ~3 s)
+    sk = np.sort(key)
+    jk = np.searchsorted(sk, rev).clip(0, len(sk) - 1)
+    border = e[sk[jk] != rev]
+    del sk, jk, key, rev
     nxt = {}
     for a, b in border:
         nxt.setdefault(int(a), []).append(int(b))
@@ -420,6 +478,7 @@ def main():
     G = np.c_[gx.ravel(), gy.ravel()]
     dd2, _ = cKDTree(P[:, :2]).query(G, k=1, distance_upper_bound=1.5, workers=-1)
     empty = ~np.isfinite(dd2)
+    empty_rempli = bool(empty.any())
     n_fill = 0
     if empty.any():
         gsel = g[keep] if False else (c[keep] == 2)
@@ -483,7 +542,19 @@ def main():
     scale = max(1.05, 0.33 * 2 ** depth / span)
     flat = pc.select_by_index(np.nonzero(~steep)[0]).voxel_down_sample(0.3)
     pcs = pc.select_by_index(np.nonzero(steep)[0]) + flat
+    # (26/11/2026 : mémoire rendue AVANT Poisson, le pic du bloc : arbre et grille du sol interpolé, copies du nuage, normales,
+    # colonnes de points qui ne servent plus. Deux blocs à la fois manquaient de mémoire sur ~23 % des tuiles du cloud.)
+    del pc, flat, N, S, tg, dd, iu, u, G, gx, gy, dd2, empty
+    if n_fill or empty_rempli:
+        del src, f, zf, F
+    if bati_poisson:
+        for cle in ('ang', 'ps', 'gt'):
+            d.pop(cle, None)
+    del ang, ps
+    import gc
+    gc.collect()
     mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcs, depth=depth, scale=float(scale), linear_fit=False)
+    del pcs, _
     chrono['poisson'] = time.time() - T0
     # 4. rognage
     V = np.asarray(mesh.vertices)
@@ -579,28 +650,10 @@ def main():
     mesh.compute_vertex_normals()
     Nv = np.asarray(mesh.vertex_normals).astype(np.float32)
     chrono['repere'] = time.time() - T0
-    # 6. occlusion ambiante : 24 rayons (cosinus) de 30 m depuis chaque sommet
-    sc = o3d.t.geometry.RaycastingScene(); sc.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mesh))
+    # 6. triangles du bloc seulement (26/11/2026 : AVANT l'occlusion, qui n'est plus calculée que pour les sommets gardés ;
+    # avant, ~40 % des rayons partaient des sommets de la marge de 60 m, jetés ensuite. Mêmes rayons, même scène (marge
+    # comprise) : même occlusion pour chaque sommet gardé.)
     nv = len(W)
-    rng = np.random.default_rng(7)
-    vis = np.zeros(nv, np.float32)
-    origin = (W + Nv * 0.15).astype(np.float32)
-    # base orthonormée par sommet
-    tx = np.cross(Nv, np.array([0, 0, 1], np.float32)); bad = np.linalg.norm(tx, axis=1) < 1e-3
-    tx[bad] = np.cross(Nv[bad], np.array([1, 0, 0], np.float32))
-    Nv[~np.isfinite(Nv).all(1)] = (0, 0, 1)
-    tx /= np.maximum(np.linalg.norm(tx, axis=1, keepdims=True), 1e-6); ty = np.cross(Nv, tx)
-    NR = 24
-    for i in range(NR):
-        u1, u2 = (i + rng.random()) / NR, rng.random()
-        r = math.sqrt(u1); phi = 2 * math.pi * u2
-        a, b, cz = r * math.cos(phi), r * math.sin(phi), math.sqrt(max(0, 1 - u1))
-        dirs = (tx * a + ty * b + Nv * cz).astype(np.float32)
-        hit = sc.cast_rays(o3d.core.Tensor(np.c_[origin, dirs]))['t_hit'].numpy()
-        vis += (hit > 30.0)
-    ao = np.clip(vis / NR * 255 + 0.5, 0, 255).astype(np.uint8)
-    chrono['occlusion'] = time.time() - T0
-    # 7. triangles du bloc seulement
     T = np.asarray(mesh.triangles)
     cen = W[T].mean(1)
     cx0, cx1 = (bx0 - mx0) * k, (bx1 - mx0) * k
@@ -609,6 +662,7 @@ def main():
     is_bat = np.arange(len(T)) >= n_tri_sol
     T = T[inside]
     is_bat = is_bat[inside]
+    del cen, inside
     # petits morceaux isolés (moins de 200 triangles) : écartés, SAUF les bâtiments (22/11/2026 : chaque pan de mur, quatre
     # sommets à lui pour une normale plate, est un morceau de 2 triangles : TOUS les murs étaient jetés ici, il ne restait
     # que des toits flottants)
@@ -622,12 +676,38 @@ def main():
     used = np.unique(T)
     remap = np.full(nv, -1, np.int64); remap[used] = np.arange(len(used))
     T = remap[T].astype(np.uint32)
-    W = W[used].astype(np.float32); Nv = Nv[used]; ao = ao[used]; canopy = canopy[used]
+    del e, lab, tl, remap
+    # 7. occlusion ambiante : 24 rayons (cosinus) de 30 m depuis chaque sommet gardé, sur toute la surface (marge comprise).
+    # (26/11/2026 : rayons lancés sur tous les cœurs ; `nthreads=0`, « automatique », n'en occupait qu'un dans le cloud)
+    sc = o3d.t.geometry.RaycastingScene(); sc.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mesh))
+    del mesh
+    rng = np.random.default_rng(7)
+    Wu, Nu = W[used], Nv[used]  # (copies : normales brutes, comme avant pour le départ des rayons et la base)
+    vis = np.zeros(len(used), np.float32)
+    origin = (Wu + Nu * 0.15).astype(np.float32)
+    # base orthonormée par sommet
+    tx = np.cross(Nu, np.array([0, 0, 1], np.float32)); bad = np.linalg.norm(tx, axis=1) < 1e-3
+    tx[bad] = np.cross(Nu[bad], np.array([1, 0, 0], np.float32))
+    Nu[~np.isfinite(Nu).all(1)] = (0, 0, 1)
+    tx /= np.maximum(np.linalg.norm(tx, axis=1, keepdims=True), 1e-6); ty = np.cross(Nu, tx)
+    NR = 24
+    for i in range(NR):
+        u1, u2 = (i + rng.random()) / NR, rng.random()
+        r = math.sqrt(u1); phi = 2 * math.pi * u2
+        a, b, cz = r * math.cos(phi), r * math.sin(phi), math.sqrt(max(0, 1 - u1))
+        dirs = (tx * a + ty * b + Nu * cz).astype(np.float32)
+        hit = sc.cast_rays(o3d.core.Tensor(np.c_[origin, dirs]), nthreads=os.cpu_count() or 0)['t_hit'].numpy()
+        vis += (hit > 30.0)
+    ao = np.clip(vis / NR * 255 + 0.5, 0, 255).astype(np.uint8)
+    del sc
+    chrono['occlusion'] = time.time() - T0
+    W = Wu.astype(np.float32); Nv = Nu; canopy = canopy[used]
     head_json = {
         'z': 16, 'x': x16, 'y': y16, 'x12': x12, 'y12': y12, 'k': k, 'latc': latc,
         'emprise': [float(cx0), float(cy0), float(cx1), float(cy1)],
         'version': 2, 'sommets': int(len(W)), 'triangles': int(len(T)), 'batiments_sommets': int(n_bat_v), 'points': int(len(P)), 'points_ajoutes': int(n_fill), 'raide': round(raide, 4), 'profondeur': depth, 'trous': trous,
-        'secondes': {a: round(b, 1) for a, b in chrono.items()} | {'total': round(time.time() - T0, 1)}
+        'secondes': {a: round(b, 1) for a, b in chrono.items()} | {'total': round(time.time() - T0, 1)},
+        'memoire_max_mo': memoire_max_mo()
     }
     if bati_poisson:
         head_json.update(head_extra)
