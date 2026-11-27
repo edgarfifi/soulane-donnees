@@ -1,0 +1,78 @@
+# Refait chaque mois NOTRE COPIE des zones de protection de la forêt et de la faune du Tyrol (Datenquelle: Land Tirol -
+# data.tirol.gv.at, CC0) : les trois services ouverts du Land sur ArcGIS Online, découpés en tuiles, publiés dans la version
+# fixe « tirol » de ce dépôt ; soulane.app reprend la dernière à sa construction suivante (/donnees/tirol/z/x/y.pbf). Le
+# serveur de cartes du Land (gis.tirol.gv.at), que lisait l'app, était en panne fin novembre 2026 : d'où cette copie. Un
+# passage raté ne change rien, la version publiée reste. Refuse de publier si la liste rétrécit d'un coup.
+# Dépôt public : minutes gratuites ; GITHUB_TOKEN suffit. Fichier tenu dans le dépôt de l'app Soulane
+# (scripts/soulane-donnees/), copié ici avec l'accord d'Edgar (docs/copies-calques.md).
+name: Zones du Tyrol (Land Tirol)
+
+on:
+  schedule:
+    # Le 5 de chaque mois, 4 h 13 (UTC).
+    - cron: '13 4 5 * *'
+  workflow_dispatch:
+    inputs:
+      forcer:
+        description: "Publier même si les chiffres s'écartent beaucoup de la fois précédente"
+        type: boolean
+        default: false
+      crochet:
+        description: "Appeler le crochet de soulane.app même sans nouvelle version (essai : le site se reconstruit, environ 3 minutes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: tirol
+  cancel-in-progress: false
+
+jobs:
+  tirol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Lire les services du Land Tirol et fabriquer les tuiles
+        run: node outils/tirol.mjs tuiles
+
+      - name: Vérifier puis publier
+        id: publier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCER: ${{ inputs.forcer && '1' || '' }}
+          JEU: tirol
+        run: node outils/publier.mjs tuiles
+
+      - name: Demander la reconstruction de soulane.app (si un crochet de déploiement est rangé en secret)
+        if: steps.publier.outputs.publie == '1' || inputs.crochet
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            curl -fsS -X POST "$HOOK" > /dev/null && echo "Reconstruction de soulane.app demandée."
+          else
+            echo "Pas de crochet : soulane.app prendra la nouvelle version à sa prochaine construction (scripts/vercel-ignore.mjs la repère)."
+          fi
+
+      - name: Noter l'état (et garder le planning actif)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/tirol.yml/enable" || true
+          if [ -f etat-tirol.json ] && [ -n "$(git status --porcelain etat-tirol.json)" ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add etat-tirol.json
+            git commit -m "Zones du Tyrol : $(node -p "require('./etat-tirol.json').resultat") ($(date -u +%Y-%m-%d))"
+            git pull --rebase --quiet && git push
+          fi

@@ -138,6 +138,24 @@ l'emprise.
   informatif, sans valeur réglementaire ; elle ne couvre pas toute la montagne. Avant tout usage, lire son guide
   d'utilisation et sa légende sur [avalanches.fr](https://www.avalanches.fr/donnees-publiques-clpa/).
 
+## Zones de protection de la forêt et de la faune du Tyrol
+
+Tuiles vectorielles (MVT, couche `zones`, zooms 8 à 14) des zones de protection de la forêt et de la faune du Tyrol
+(Wald- und Wildschutzzonen, programme « Bergwelt Tirol, Miteinander Erleben »), des périmètres de leurs projets et des zones
+de tranquillité réglementées (Wildruheflächen), telles que les montre le calque « Zones de tranquillité (faune) » de l'app
+[Soulane](https://soulane.app). Propriétés : `k` classe (1 zone de protection, conseillée du 1er décembre au 15 avril ;
+2 périmètre d'un projet ; 3 zone de tranquillité réglementée, interdite pendant l'affouragement d'hiver), `s` ce qui est
+protégé (1 tétras, 2 chamois et bouquetin, 3 cerf, 4 forêt de protection), `n` le lieu.
+
+- **Version publiée** : dans la version fixe [`tirol`](https://github.com/edgarfifi/soulane-donnees/releases/tag/tirol) :
+  [`manifeste.json`](https://github.com/edgarfifi/soulane-donnees/releases/download/tirol/manifeste.json) nomme l'archive à
+  prendre (`archive`) ; les 3 archives les plus récentes sont gardées.
+- **Mise à jour** : le 5 de chaque mois ([`.github/workflows/tirol.yml`](.github/workflows/tirol.yml)) : les trois services
+  ouverts du Land sur ArcGIS Online sont lus ([`outils/tirol.mjs`](outils/tirol.mjs)), puis comparés à la version publiée
+  ([`outils/publier.mjs`](outils/publier.mjs)). L'état du dernier passage est dans [`etat-tirol.json`](etat-tirol.json).
+- **Source et licence** : Datenquelle: Land Tirol - data.tirol.gv.at ; CC0 1.0. Géométrie non modifiée : découpage en tuiles
+  et arrondi à leur grille seulement.
+
 ## Neige prévue (prochaines 24 et 48 heures)
 
 Grille de la neige fraîche prévue sur la France, les Alpes et les Pyrénées (grille de 0,025°, environ 2,5 km), pour les

@@ -545,6 +545,125 @@ export function clpaReleaseNotes(m) {
   ].join('\n\n')
 }
 
+/** NOS COPIES des calques dont le serveur d'origine tombe en panne (27/11/2026, outils/tirol.mjs et outils/aee.mjs) : zones
+ *  du Tyrol, sites Natura 2000 et aires protégées nationales hors de France. Des listes officielles qui changent peu : une
+ *  baisse nette = une réponse tronquée ou une colonne mal lue, on garde la version d'avant. `classes` : effectif minimal de
+ *  chaque classe (« k » des tuiles) ; `pays` : pays qui doivent être là ; `maxOctets` : plafond du jeu (le site les sert). */
+export const COPY_LIMITS = {
+  tirol: { minZones: 250, classes: { 1: 200, 2: 15, 3: 35 }, pays: [], maxOctets: 50 * 1048576 },
+  'natura-eu': { minZones: 1500, classes: { 1: 500, 2: 150 }, pays: ['AT', 'DE', 'ES', 'IT', 'SI'], maxOctets: 600 * 1048576 },
+  'cdda-eu': { minZones: 2000, classes: {}, pays: ['AT', 'CH', 'DE', 'ES', 'IT', 'SI'], maxOctets: 600 * 1048576 }
+}
+/** Écarts acceptés avec la version publiée (à la baisse / à la hausse). */
+export const COPY_DRIFT = { zones: { down: 0.1, up: 0.5 }, tuiles: { down: 0.15, up: 0.6 }, octets: { down: 0.25, up: 0.8 } }
+export const COPY_KEEP = 3
+
+/** Décision PURE (copies), mêmes réponses que compareManifests. */
+export function compareCopyManifests(jeu, prev, next, limits = COPY_LIMITS[jeu], drift = COPY_DRIFT) {
+  const errors = []
+  if (!limits) return { fresh: false, ok: false, errors: [`Jeu inconnu : ${jeu}.`] }
+  if (!next || next.jeu !== jeu || typeof next.zones !== 'number' || !next.tuiles || !Array.isArray(next.zooms) || !/^\d{4}-\d{2}-\d{2}$/.test(String(next.version))) {
+    return { fresh: false, ok: false, errors: ['Manifeste neuf illisible.'] }
+  }
+  if (prev && prev.empreinte && prev.empreinte === next.empreinte) return { fresh: false, ok: true, errors: [] }
+  if (next.zones < limits.minZones) errors.push(`Seulement ${next.zones} zones (au moins ${limits.minZones} attendues).`)
+  for (const [k, min] of Object.entries(limits.classes)) if (!((next.classes ?? {})[k] >= min)) errors.push(`Classe ${k} : ${(next.classes ?? {})[k] ?? 0} zones (au moins ${min} attendues).`)
+  for (const p of limits.pays) if (!((next.pays ?? {})[p] > 0)) errors.push(`Pays ${p} absent.`)
+  for (const z of next.zooms) if (!(next.tuiles[z]?.tuiles > 0)) errors.push(`Aucune tuile au zoom ${z}.`)
+  const octets = Object.values(next.tuiles).reduce((s, t) => s + (t.octets ?? 0), 0)
+  if (octets > limits.maxOctets) errors.push(`${(octets / 1048576).toFixed(0)} Mo de tuiles (au plus ${(limits.maxOctets / 1048576).toFixed(0)} Mo) : zooms ou simplification à revoir.`)
+  if (prev && typeof prev.zones === 'number') {
+    if (typeof prev.version === 'string' && String(next.version) < prev.version) errors.push(`Version du ${next.version}, plus ancienne que la version publiée (${prev.version}).`)
+    if (outOf(next.zones, prev.zones, drift.zones)) errors.push(`${next.zones} zones contre ${prev.zones} la fois précédente (${pct(next.zones, prev.zones)}).`)
+    for (const [z, p] of Object.entries(prev.tuiles ?? {})) {
+      const n = next.tuiles[z]
+      if (!n) {
+        errors.push(`Zoom ${z} absent (présent la fois précédente).`)
+        continue
+      }
+      if (outOf(n.tuiles, p.tuiles, drift.tuiles)) errors.push(`Zoom ${z} : ${n.tuiles} tuiles contre ${p.tuiles} (${pct(n.tuiles, p.tuiles)}).`)
+      if (outOf(n.octets, p.octets, drift.octets)) errors.push(`Zoom ${z} : ${n.octets} octets contre ${p.octets} (${pct(n.octets, p.octets)}).`)
+    }
+  }
+  return { fresh: true, ok: errors.length === 0, errors }
+}
+
+/** Nom (unique, jamais remplacé) de l'archive d'une fabrication d'une copie. */
+export function copyArchiveName(jeu, fabrique, empreinte) {
+  return `${jeu}-${String(fabrique).slice(0, 10).replace(/-/g, '')}-${String(empreinte).slice(0, 12)}.tar.gz`
+}
+/** Expression des noms d'archive d'une copie (lue aussi par scripts/web-build.mjs du dépôt de l'app). */
+export const copyArchivePattern = (jeu) => new RegExp(`^${jeu.replace(/-/g, '\\-')}-\\d{8}-[0-9a-f]+\\.tar\\.gz$`)
+/** Archives à retirer de la version d'une copie. PUR, comme skiArchivesToDrop. */
+export function copyArchivesToDrop(jeu, names, current, keep = COPY_KEEP) {
+  const re = copyArchivePattern(jeu)
+  const archives = names.filter((n) => re.test(n) && n !== current).sort().reverse()
+  return archives.slice(Math.max(0, keep - 1))
+}
+
+const COPY_TEXTS = {
+  tirol: {
+    title: 'Zones de protection de la forêt et de la faune du Tyrol (Land Tirol)',
+    label: 'Zones du Tyrol',
+    what:
+      "Tuiles vectorielles (MVT, couche « zones ») des zones de protection de la forêt et de la faune du Tyrol (Wald- und Wildschutzzonen, programme « Bergwelt Tirol, Miteinander Erleben »), des périmètres de leurs projets et des zones de tranquillité réglementées (Wildruheflächen), telles que les montre le calque « Zones de tranquillité (faune) » de l'app Soulane (https://soulane.app). Propriétés : « k » classe (1 zone de protection, conseillée du 1er décembre au 15 avril ; 2 périmètre d'un projet ; 3 zone de tranquillité réglementée, interdite pendant la période d'affouragement d'hiver, au plus du 16 novembre au 15 mai), « s » ce qui est protégé (1 tétras, 2 chamois et bouquetin, 3 cerf, 4 forêt de protection), « n » le lieu.",
+    source:
+      'Datenquelle: Land Tirol - data.tirol.gv.at (services ouverts « Wald_und_Wildschutzzonen », « Wald_Wildschutzzonen_Projektgrenzen » et « Wildruheflaechen_Tirol » de l’organisation tiris.ogd sur ArcGIS Online), CC0 1.0. Géométrie non modifiée : découpage en tuiles et arrondi à leur grille seulement.'
+  },
+  'natura-eu': {
+    title: 'Sites Natura 2000 hors de France, Alpes et Pyrénées (AEE)',
+    label: 'Natura 2000 hors de France',
+    what:
+      "Tuiles vectorielles (MVT, couche « natura ») des sites Natura 2000 des Alpes et des Pyrénées hors de France, telles que les montre le calque « Natura 2000 » de l'app Soulane (https://soulane.app). Propriétés : « k » directive (1 Habitats, 2 Oiseaux, 3 les deux), « n » nom du site.",
+    source:
+      "Natura 2000 © Direction générale de l'environnement de la Commission européenne (DG ENV), jeu « Natura 2000 (vector) » diffusé par l'Agence européenne pour l'environnement, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Modifications : sites de France retirés, découpage aux régions (Alpes, Pyrénées) et en tuiles, simplification à moins d'une unité de tuile jusqu'au zoom 12. Seules les données des autorités des États membres font foi."
+  },
+  'cdda-eu': {
+    title: 'Aires protégées nationales hors de France, Alpes et Pyrénées (AEE, CDDA)',
+    label: 'Aires protégées hors de France',
+    what:
+      "Tuiles vectorielles (MVT, couche « cdda ») des aires protégées nationales (CDDA) des Alpes et des Pyrénées hors de France, telles que les montre le calque « Parcs & réserves » de l'app Soulane (https://soulane.app). Propriétés : « k » catégorie de l'UICN (1 Ia, 2 Ib, 3 II, 4 III, 5 IV, 6 V, 7 VI, 0 autre ou non donnée), « n » nom de l'aire.",
+    source:
+      "Aires protégées nationales © Agence européenne pour l'environnement et les pays qui les déclarent (jeu « Nationally designated areas for public access »), CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Modifications : aires de France retirées, découpage aux régions (Alpes, Pyrénées) et en tuiles, simplification à moins d'une unité de tuile jusqu'au zoom 12."
+  }
+}
+
+/** Texte de la version d'une copie (ce qu'il y a, source, droit, modifications). */
+export function copyReleaseNotes(jeu, m) {
+  const t = COPY_TEXTS[jeu]
+  return [
+    `${t.what} Fabriquées le ${String(m.fabrique).slice(0, 10)} ; dernière archive : ${m.archive}.`,
+    `${m.zones} zones${m.pays ? ` (${Object.entries(m.pays).sort().map(([k, v]) => `${k} ${v}`).join(', ')})` : ''} ; données d'origine du ${m.version}.`,
+    t.source
+  ].join('\n\n')
+}
+
+const copySet = (jeu) => ({
+  release: jeu,
+  title: COPY_TEXTS[jeu].title,
+  label: COPY_TEXTS[jeu].label,
+  stateFile: `etat-${jeu}.json`,
+  tmpPrefix: `${jeu}-`,
+  compare: (prev, next) => compareCopyManifests(jeu, prev, next),
+  archiveName: (fabrique, empreinte) => copyArchiveName(jeu, fabrique, empreinte),
+  toDrop: (assets, name) => copyArchivesToDrop(jeu, assets, name),
+  notes: (m) => copyReleaseNotes(jeu, m),
+  describePrev: (prev) => `${prev.zones} zones`,
+  state: (next, total) => ({ zones: next.zones, tuiles: total, version: next.version, ...(next.source_jeu ? { source_jeu: next.source_jeu } : {}) }),
+  head: (next, total) => `**${next.zones} zones**, ${total} tuiles (données d'origine du ${next.version})`
+})
+
+/** État d'une copie quand la source ne répond pas, ou n'a pas changé (rien de téléchargé) : écrit sans rien publier. La
+ *  date de début d'une panne est gardée d'un passage à l'autre (« injoignable_depuis », lue par api/_donnees.mjs). PUR. */
+export function copyWaitState(prev, result, nowIso, message) {
+  const keep = prev && typeof prev === 'object' ? prev : {}
+  const since = result === 'injoignable' ? (keep.resultat === 'injoignable' && keep.injoignable_depuis ? keep.injoignable_depuis : nowIso) : undefined
+  const { injoignable_depuis: _drop, message: _old, ...rest } = keep
+  void _drop
+  void _old
+  return { ...rest, verifie: nowIso, resultat: result, ...(since ? { injoignable_depuis: since } : {}), ...(message ? { message: String(message).slice(0, 300) } : {}) }
+}
+
 /** Jeux publiés dans une version FIXE (manifeste qui nomme une archive au nom unique) : itinéraires de ski de rando,
  *  sentiers, topos Skitour. Chaque jeu dit sa version, ses fichiers, sa décision, ses textes. */
 const skiVersions = (next) => Object.fromEntries(Object.entries(next.regions ?? {}).map(([id, r]) => [id, r.version ?? null]))
@@ -633,7 +752,10 @@ export const FIXED_SETS = {
     describePrev: (prev) => `${prev.zones} zones`,
     state: (next, total) => ({ zones: next.zones, lignes: next.lignes, tuiles: total, version: next.version, maj: next.maj ?? null }),
     head: (next, total) => `**${next.zones} zones**, ${next.lignes} lignes, ${total} tuiles (fichiers de l'INRAE du ${next.version})`
-  }
+  },
+  tirol: copySet('tirol'),
+  'natura-eu': copySet('natura-eu'),
+  'cdda-eu': copySet('cdda-eu')
 }
 
 /** Vérifie puis publie un jeu de FIXED_SETS. */
@@ -716,11 +838,24 @@ export async function checkLatest(repo, empreinte, tries = 6, url = `https://git
   return false
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Copies : « JEU=<jeu> node outils/publier.mjs --injoignable|--inchange [message] » note l'état sans rien publier (la
+// source ne répond pas ; ou même version que la publiée, rien téléchargé).
+const WAIT = { '--injoignable': 'injoignable', '--inchange': 'inchange' }
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url) && WAIT[process.argv[2]] && COPY_LIMITS[process.env.JEU ?? '']) {
+  const file = `etat-${process.env.JEU}.json`
+  let prev
+  try {
+    prev = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null
+  } catch {
+    prev = null
+  }
+  writeFileSync(file, JSON.stringify(copyWaitState(prev, WAIT[process.argv[2]], new Date().toISOString(), process.argv[3]), null, 1) + '\n')
+  console.log(`${file} : ${WAIT[process.argv[2]]}.`)
+} else if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const dir = resolve(process.argv[2] ?? '')
   const set = FIXED_SETS[process.env.JEU ?? '']
   if (!existsSync(join(dir, 'manifeste.json')) || (process.env.JEU && !set)) {
-    console.error('Usage : [JEU=skirando|sentiers|skitour|transports|clpa] node outils/publier.mjs <dossier des tuiles> (avec son manifeste.json)')
+    console.error('Usage : [JEU=skirando|sentiers|skitour|transports|clpa|tirol|natura-eu|cdda-eu] node outils/publier.mjs <dossier des tuiles> (avec son manifeste.json)')
     process.exit(2)
   }
   if (set) publishFixed(dir, set)

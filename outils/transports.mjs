@@ -56,7 +56,7 @@ var TRANSIT_FEEDS = [
   tdg("cars-region-74", "Cars R\xE9gion Haute-Savoie", "reseau-interurbain-cars-region-haute-savoie-74", "https://www.oura.com/"),
   tdg("cars-region-38", "Cars R\xE9gion Is\xE8re", "reseau-interurbain-cars-region-isere-38-1", "https://www.oura.com/"),
   tdg("cars-region-01", "Cars R\xE9gion Ain", "reseau-interurbain-cars-region-ain-01", "https://www.oura.com/"),
-  tdg("cars-region-26", "Cars R\xE9gion Dr\xF4me", "reseau-interurbain-et-scolaire-cars-region-drome-26", "https://www.oura.com/"),
+  tdg("cars-region-26", "Cars R\xE9gion Dr\xF4me", "reseau-interurbain-cars-region-drome-26", "https://www.oura.com/"),
   tdg("cars-region-express", "Cars R\xE9gion Express", "reseau-interurbain-cars-region-express", "https://www.oura.com/"),
   tdg("transaltitude", "Transaltitude (Is\xE8re)", "desserte-des-stations-de-ski-iseroises-transaltitude-38", "https://www.transaltitude.fr/fr/liste-des-stations-horaire-et-tarifs/"),
   tdg("chamonix", "Chamonix Mobilit\xE9", "gtfs-reseau-chamonix-mobilite", "https://www.chamonix-mobilite.com/bus"),
@@ -746,9 +746,34 @@ async function tdgResources(slug) {
   const d = await tdgDataset(slug);
   const licence = TDG_LICENCES[d.licence ?? ""];
   if (!licence) throw new Error(`jeu ${slug} : licence \xAB ${d.licence} \xBB non accept\xE9e`);
-  const urls = (d.resources ?? []).filter((x) => x.format === "GTFS" && x.is_available !== false && typeof x.url === "string").map((x) => x.url);
-  if (!urls.length) throw new Error(`jeu ${slug} : aucun GTFS disponible`);
-  return { urls: [...new Set(urls)], licence };
+  const gtfs = (d.resources ?? []).filter((x) => x.format === "GTFS" && (typeof x.url === "string" || typeof x.original_url === "string"));
+  const files = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const x of [...gtfs.filter((r) => r.is_available !== false), ...gtfs.filter((r) => r.is_available === false)]) {
+    const urls = [...new Set([x.url, x.original_url].filter((u) => typeof u === "string" && /^https?:\/\//.test(u)))].filter((u) => !seen.has(u));
+    if (!urls.length) continue;
+    for (const u of urls) seen.add(u);
+    files.push({ urls, optional: x.is_available === false });
+  }
+  if (!files.length) throw new Error(`jeu ${slug} : aucun GTFS`);
+  return { files, licence };
+}
+async function downloadFeedFile(f, file) {
+  let last = null;
+  for (const u of f.urls) {
+    try {
+      await download(u, file);
+      return true;
+    } catch (e) {
+      last = e;
+      rmSync(file, { force: true });
+    }
+  }
+  if (f.optional) {
+    console.log(`Fichier dit indisponible, et il l'est : ${f.urls.join(", ")} (${String(last)})`);
+    return false;
+  }
+  throw last instanceof Error ? last : new Error(String(last));
 }
 async function firstAvailable(urls) {
   for (const u of urls) {
@@ -1033,24 +1058,28 @@ var lineByKey = /* @__PURE__ */ new Map();
 for (const feed of TRANSIT_FEEDS) {
   if (only && !only.includes(feed.id)) continue;
   try {
-    let urls;
+    let files;
     let source;
     let licence;
     if ("tdg" in feed.source) {
       const res = await tdgResources(feed.source.tdg);
-      urls = res.urls;
+      files = res.files;
       source = "transport.data.gouv.fr";
       licence = res.licence.name;
     } else {
-      urls = [await firstAvailable(yearCandidates(feed.source.url))];
+      files = [{ urls: [await firstAvailable(yearCandidates(feed.source.url))], optional: false }];
       source = feed.source.producteur;
       licence = feed.source.licence.name;
     }
     let arrets = 0;
     let lignes = 0;
-    for (const [n, url] of urls.entries()) {
+    let read = 0;
+    for (const [n, f] of files.entries()) {
       const file = join(work, `${feed.id}-${n}.zip`);
-      if (!cacheDir || !existsSync(file)) await download(url, file);
+      if (!cacheDir || !existsSync(file)) {
+        if (!await downloadFeedFile(f, file)) continue;
+      }
+      read++;
       const r = await readFeed(feed, file, source, licence);
       if (!cacheDir) rmSync(file, { force: true });
       const lineIdx = [];
@@ -1084,7 +1113,8 @@ for (const feed of TRANSIT_FEEDS) {
       arrets += r.stops.length;
       lignes += r.lines.length;
     }
-    perFeed[feed.id] = { arrets, lignes, source: urls.length > 1 ? `${urls.length} fichiers` : void 0 };
+    if (!read) throw new Error(`aucun des ${files.length} fichiers GTFS ne r\xE9pond`);
+    perFeed[feed.id] = { arrets, lignes, source: read > 1 ? `${read} fichiers` : void 0 };
   } catch (e) {
     console.warn(`\u2718 ${feed.id} : ${String(e)}`);
     perFeed[feed.id] = { arrets: 0, lignes: 0, erreur: String(e).slice(0, 200) };
