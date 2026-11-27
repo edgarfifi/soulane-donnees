@@ -74,6 +74,17 @@ jobs:
           LOTS: ${{ inputs.lots }}
           SEULS: ${{ inputs.paquets_seuls }}
         run: |
+          set -euo pipefail
+          L=$(echo "$LOTS" | awk '{print $1}')
+          REPRISES=""
+          if [ -n "$L" ] && [ -z "$SEULS" ]; then
+            # tuiles des lots déjà lancés restées sans rien sur R2 (machine arrêtée) : reprises ici, un bloc à la fois
+            (aws s3 ls "s3://$BUCKET/v2-parties/" --endpoint-url "$R2" || true) | awk '{print $4}' > parties.txt
+            (aws s3 ls "s3://$BUCKET/v2-chaine/" --endpoint-url "$R2" || true) | awk '{print $4}' > chaine.txt
+            REPRISES=$(python3 relief-hd/tuiles-manquantes.py parties.txt chaine.txt "$L")
+            echo "lancé $(date -u +%FT%TZ) run $GITHUB_RUN_ID" | aws s3 cp - "s3://$BUCKET/v2-chaine/lot_$L.lance" --endpoint-url "$R2" --only-show-errors
+          fi
+          export REPRISES
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
           lots = os.environ.get('LOTS', '').split()
@@ -84,6 +95,8 @@ jobs:
               st = json.load(open('relief-hd/stations/stations-france-2km.json', encoding='utf-8'))
               t = st['lots_utiles'][int(lots[0])]['tuiles'].split()
               reste = ' '.join(lots[1:])
+              # « x/y:1 » : tuile reprise, fabriquée un bloc à la fois (une matrice : 256 travaux au plus)
+              t += [r + ':1' for r in os.environ.get('REPRISES', '').split()][:max(0, 256 - len(t))]
           else:
               t = os.environ.get('TUILES', '').split()
               if not t:
@@ -141,7 +154,9 @@ jobs:
           RELIEF_PARALLELE: ${{ inputs.parallele || '2' }}
         run: |
           set -euo pipefail
-          X=${TUILE%/*}; Y=${TUILE#*/}
+          T=${TUILE%%:*}; X=${T%/*}; Y=${T#*/}
+          # (« x/y:1 » : tuile reprise d'un lot précédent, un bloc à la fois d'emblée)
+          [ "$T" != "$TUILE" ] && export RELIEF_PARALLELE=1
           python relief-hd/tuile14.py "$X" "$Y" dalles travail sortie --paquet relief-hd/paquet-build.mjs ${{ inputs.arbres_seuls && '--arbres-seuls' || '' }}
           ls -la sortie | head -50
 
@@ -157,7 +172,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf travail sortie
-          X=${TUILE%/*}; Y=${TUILE#*/}
+          T=${TUILE%%:*}; X=${T%/*}; Y=${T#*/}
           python relief-hd/tuile14.py "$X" "$Y" dalles travail sortie --paquet relief-hd/paquet-build.mjs ${{ inputs.arbres_seuls && '--arbres-seuls' || '' }}
           ls -la sortie | head -50
 
@@ -167,7 +182,7 @@ jobs:
           TUILE: ${{ matrix.tuile }}
         run: |
           set -euo pipefail
-          X=${TUILE%/*}; Y=${TUILE#*/}
+          T=${TUILE%%:*}; X=${T%/*}; Y=${T#*/}
           K="v2-parties/14_${X}_${Y}.tar"
           tar -cf parties.tar -C sortie .
           for i in 1 2 3 4 5; do
@@ -186,7 +201,7 @@ jobs:
           ARBRES_SEULS: ${{ inputs.arbres_seuls }}
         run: |
           set -euo pipefail
-          X=${TUILE%/*}; Y=${TUILE#*/}
+          T=${TUILE%%:*}; X=${T%/*}; Y=${T#*/}
           [ "$ARBRES_SEULS" = true ] && { echo "arbres de la tuile $TUILE EN ÉCHEC (deux essais)"; exit 1; }
           # Vide : les 16 blocs finissent par « aucun point », sans erreur ni dalle du catalogue manquante (la tuile est
           # au-delà d'une frontière ou en mer). Ses voisines peuvent alors se raccorder sans elle. Sinon : vrai échec.
@@ -335,15 +350,34 @@ jobs:
             fi
           fi
 
+  # Lot suivant ; après le dernier lot, UNE reprise des tuiles encore absentes de R2 (un bloc à la fois, sans « lots » :
+  # elle ne relance rien ensuite).
   suite:
     needs: [liste, manifeste]
-    if: always() && needs.liste.outputs.reste != '' && vars.RELIEF_CHAINE == '1' && needs.manifeste.result != 'failure'
+    if: always() && inputs.lots != '' && inputs.paquets_seuls == '' && vars.RELIEF_CHAINE == '1' && needs.manifeste.result != 'failure'
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      contents: read
     steps:
-      - name: Lot suivant
+      - uses: actions/checkout@v7
+      - name: Lot suivant, ou dernière reprise
         env:
           GH_TOKEN: ${{ github.token }}
           RESTE: ${{ needs.liste.outputs.reste }}
-        run: gh workflow run relief-hd.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f lots="$RESTE" -f paquets=true
+        run: |
+          set -euo pipefail
+          if [ -n "$RESTE" ]; then
+            gh workflow run relief-hd.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f lots="$RESTE" -f paquets=true
+            echo "lot suivant lancé : $RESTE"
+            exit 0
+          fi
+          (aws s3 ls "s3://$BUCKET/v2-parties/" --endpoint-url "$R2" || true) | awk '{print $4}' > parties.txt
+          (aws s3 ls "s3://$BUCKET/v2-chaine/" --endpoint-url "$R2" || true) | awk '{print $4}' > chaine.txt
+          M=$(python3 relief-hd/tuiles-manquantes.py parties.txt chaine.txt | tr ' ' '\n' | head -256 | paste -sd' ' -)
+          if [ -n "$M" ]; then
+            gh workflow run relief-hd.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f tuiles="$M" -f parallele=1 -f paquets=true
+            echo "dernière reprise lancée : $(echo $M | wc -w) tuiles"
+          else
+            echo "toutes les tuiles des lots sont faites"
+          fi
