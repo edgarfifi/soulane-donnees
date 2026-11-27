@@ -1,10 +1,13 @@
 {
- "verifie": "2026-11-20T12:59:31.361Z",
- "resultat": "publie",
- "arrets": 28391,
- "lignes": 4070,
- "tuiles": 10745,
- "erreurs": {},
- "empreinte": "d49b42a97196d969fcfb7b015d393704bce41471571285dfcd5351b668c47500",
+ "verifie": "2026-11-27T13:57:55.426Z",
+ "resultat": "refuse",
+ "arrets": 28184,
+ "lignes": 4030,
+ "tuiles": 10337,
+ "erreurs": [
+  "Réseau « cars-region-26 » disparu (332 arrêts la fois précédente) : Error: jeu reseau-interurbain-et-scolaire-cars-region-drome-26 : absent de transport.data.gouv.fr.",
+  "Réseau « corse-cars » disparu (106 arrêts la fois précédente) : Error: jeu gtfs-transport-via-strada : aucun GTFS disponible."
+ ],
+ "empreinte": "503055dbc0be4aa12a4fe6b96ccd21a1ad218b674d7f74e3248218a1c560eb77",
  "archive": "transports-20261120-d49b42a97196.tar.gz"
 }
