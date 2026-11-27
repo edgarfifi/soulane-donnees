@@ -1,15 +1,42 @@
 name: Relief HD (fabrication des maillages 3D)
 
 # Relief HD de Soulane : surface 3D (sol, roche, parois) et arbres tirés du nuage de points du LiDAR HD de l'IGN
-# (Licence Ouverte 2.0), une tuile du zoom 14 par travail. Lancé à la main seulement ; les résultats (nœuds de maillage
-# compressés, arbres) partent en artefacts, assemblés et mis en ligne ensuite depuis le poste de Soulane.
+# (Licence Ouverte 2.0), une tuile du zoom 14 par travail. Lancé à la main seulement.
+#
+# CHAÎNE CLOUD (27/11/2026, accord d'Edgar : toutes les stations de France sans le poste de Soulane, ~3 jours) :
+#  1. liste         : tuiles d'un lot de stations (relief-hd/stations/stations-france-2km.json, lots_utiles) ou données ;
+#  2. fabrique      : une tuile par machine ; ses parties BRUTES partent sur R2 (v2-parties/14_<x>_<y>.tar, jamais lues
+#                     par l'app ; .vide = tuile hors du LiDAR HD) ;
+#  3. paquets-liste : paquets PRÊTS (toutes les tuiles prévues de leur carré 6 × 6 faites : relief-hd/paquets-prets.py) ;
+#  4. paquets       : un paquet z12 par machine : raccords avec ses voisines, assemblage (relief-hd/paquet-cloud.mjs),
+#                     envoi sur R2, index du paquet en dernier, relecture ; marque v2-chaine/12_<x>_<y>.fait ;
+#  5. manifeste     : refait d'après ce qui est sur R2, envoyé EN DERNIER, relu en ligne ;
+#  6. suite         : lance le lot suivant (variable du dépôt RELIEF_CHAINE = 1 ; la mettre à 0 arrête la chaîne).
+# Clés R2 : secrets R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY (jeton « soulane-relief-robot », compartiment soulane-relief
+# seul), variable R2_ENDPOINT.
 on:
   workflow_dispatch:
     inputs:
       tuiles:
-        description: "Tuiles du zoom 14 à fabriquer (x/y séparés par des espaces) ; vide = toute la zone de Courchevel"
+        description: "Tuiles du zoom 14 à fabriquer (x/y séparés par des espaces) ; vide (sans lot ni paquets) = la zone de Courchevel"
         type: string
         default: ''
+      lots:
+        description: "Lots de stations (rangs de lots_utiles, séparés par des espaces) : le premier ici, les suivants lancés à la fin"
+        type: string
+        default: ''
+      paquets:
+        description: "Puis raccorder, assembler et mettre en ligne les paquets prêts"
+        type: boolean
+        default: false
+      paquets_seuls:
+        description: "Sans fabrication : « prets » = tous les paquets prêts, ou une liste x12/y12 à refaire telle quelle"
+        type: string
+        default: ''
+      prefixe:
+        description: "Dossier de R2 des paquets : v2 = en ligne dans l'app ; essai = à part, pour vérifier"
+        type: string
+        default: 'v2'
       arbres_seuls:
         description: "Seulement les arbres (après une retouche de arbres.py : minutes au lieu d'heures)"
         type: boolean
@@ -22,27 +49,54 @@ on:
 permissions:
   contents: read
 
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: auto
+  # (R2 ne suit pas les sommes de contrôle par défaut des AWS CLI récents)
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  R2: ${{ vars.R2_ENDPOINT }}
+  BUCKET: soulane-relief
+
 jobs:
   liste:
     runs-on: ubuntu-latest
     outputs:
       tuiles: ${{ steps.l.outputs.tuiles }}
+      n: ${{ steps.l.outputs.n }}
+      reste: ${{ steps.l.outputs.reste }}
     steps:
+      - uses: actions/checkout@v7
       - id: l
         env:
           TUILES: ${{ inputs.tuiles }}
+          LOTS: ${{ inputs.lots }}
+          SEULS: ${{ inputs.paquets_seuls }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
-          t = os.environ.get('TUILES', '').split()
-          if not t:
-              # Courchevel : tuiles z12 x 2122 à 2124, y 1466 à 1467 → z14 x 8488 à 8499, y 5864 à 5871
-              t = [f'{x}/{y}' for y in range(5864, 5872) for x in range(8488, 8500)]
+          lots = os.environ.get('LOTS', '').split()
+          reste = ''
+          if os.environ.get('SEULS', '').strip():
+              t = []
+          elif lots:
+              st = json.load(open('relief-hd/stations/stations-france-2km.json', encoding='utf-8'))
+              t = st['lots_utiles'][int(lots[0])]['tuiles'].split()
+              reste = ' '.join(lots[1:])
+          else:
+              t = os.environ.get('TUILES', '').split()
+              if not t:
+                  # Courchevel : tuiles z12 x 2122 à 2124, y 1466 à 1467 → z14 x 8488 à 8499, y 5864 à 5871
+                  t = [f'{x}/{y}' for y in range(5864, 5872) for x in range(8488, 8500)]
           print('tuiles=' + json.dumps(t))
+          print(f'n={len(t)}')
+          print(f'reste={reste}')
           PY
 
   fabrique:
     needs: liste
+    if: needs.liste.outputs.n != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 330
     strategy:
@@ -80,6 +134,8 @@ jobs:
           curl -sS -I -A 'Mozilla/5.0 (relief-hd)' "$U" | head -20 || true
 
       - name: Fabriquer la tuile ${{ matrix.tuile }}
+        id: fab
+        continue-on-error: true
         env:
           TUILE: ${{ matrix.tuile }}
           RELIEF_PARALLELE: ${{ inputs.parallele || '2' }}
@@ -88,6 +144,68 @@ jobs:
           X=${TUILE%/*}; Y=${TUILE#*/}
           python relief-hd/tuile14.py "$X" "$Y" dalles travail sortie --paquet relief-hd/paquet-build.mjs ${{ inputs.arbres_seuls && '--arbres-seuls' || '' }}
           ls -la sortie | head -50
+
+      # (27/11/2026 : une tuile en échec, souvent faute de mémoire avec deux blocs à la fois, est refaite aussitôt un bloc à
+      # la fois, ~1 h, sur la même machine et avec les dalles déjà téléchargées ; avant, elle attendait un second run.)
+      - name: Seconde fabrication, un bloc à la fois
+        id: fab1
+        if: steps.fab.outcome == 'failure'
+        continue-on-error: true
+        env:
+          TUILE: ${{ matrix.tuile }}
+          RELIEF_PARALLELE: '1'
+        run: |
+          set -euo pipefail
+          rm -rf travail sortie
+          X=${TUILE%/*}; Y=${TUILE#*/}
+          python relief-hd/tuile14.py "$X" "$Y" dalles travail sortie --paquet relief-hd/paquet-build.mjs ${{ inputs.arbres_seuls && '--arbres-seuls' || '' }}
+          ls -la sortie | head -50
+
+      - name: Parties brutes sur R2
+        if: (steps.fab.outcome == 'success' || steps.fab1.outcome == 'success') && !inputs.arbres_seuls
+        env:
+          TUILE: ${{ matrix.tuile }}
+        run: |
+          set -euo pipefail
+          X=${TUILE%/*}; Y=${TUILE#*/}
+          K="v2-parties/14_${X}_${Y}.tar"
+          tar -cf parties.tar -C sortie .
+          for i in 1 2 3 4 5; do
+            aws s3 cp parties.tar "s3://$BUCKET/$K" --endpoint-url "$R2" --only-show-errors && break
+            [ $i = 5 ] && exit 1; sleep $((i * 20))
+          done
+          L=$(stat -c %s parties.tar)
+          E=$(aws s3api head-object --bucket "$BUCKET" --key "$K" --endpoint-url "$R2" --query ContentLength --output text)
+          echo "$K : $L octets, relu $E"
+          [ "$L" = "$E" ]
+
+      - name: Tuile vide (hors du LiDAR HD) ou en échec
+        if: steps.fab.outcome == 'failure' && steps.fab1.outcome == 'failure'
+        env:
+          TUILE: ${{ matrix.tuile }}
+          ARBRES_SEULS: ${{ inputs.arbres_seuls }}
+        run: |
+          set -euo pipefail
+          X=${TUILE%/*}; Y=${TUILE#*/}
+          [ "$ARBRES_SEULS" = true ] && { echo "arbres de la tuile $TUILE EN ÉCHEC (deux essais)"; exit 1; }
+          # Vide : les 16 blocs finissent par « aucun point », sans erreur ni dalle du catalogue manquante (la tuile est
+          # au-delà d'une frontière ou en mer). Ses voisines peuvent alors se raccorder sans elle. Sinon : vrai échec.
+          if python3 - "sortie/14_${X}_${Y}.journal.json" <<'PY'
+          import json, sys
+          try:
+              b = json.load(open(sys.argv[1], encoding='utf-8'))['blocs']
+          except Exception:
+              sys.exit(1)
+          vide = all(e.get('code') == 0 and e.get('fin', '').startswith('aucun point') and not any(l.startswith('DALLE ABSENTE') for l in e.get('dalles', [])) for e in b)
+          sys.exit(0 if vide and len(b) == 16 else 1)
+          PY
+          then
+            echo "vide $(date -u +%FT%TZ)" | aws s3 cp - "s3://$BUCKET/v2-parties/14_${X}_${Y}.vide" --endpoint-url "$R2" --only-show-errors
+            echo "tuile $TUILE VIDE (hors du LiDAR HD) : marquée sur R2"
+          else
+            echo "tuile $TUILE EN ÉCHEC (deux essais) : ses paquets attendront"
+            exit 1
+          fi
 
       - name: Résultats
         if: always()
@@ -98,3 +216,134 @@ jobs:
           retention-days: 7
           compression-level: 0
           if-no-files-found: warn
+
+  paquets-liste:
+    needs: [liste, fabrique]
+    if: always() && needs.liste.result == 'success' && !inputs.arbres_seuls && (inputs.paquets || inputs.paquets_seuls != '')
+    runs-on: ubuntu-latest
+    outputs:
+      paquets: ${{ steps.p.outputs.paquets }}
+      n: ${{ steps.p.outputs.n }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: p
+        env:
+          SEULS: ${{ inputs.paquets_seuls }}
+        run: |
+          set -euo pipefail
+          (aws s3 ls "s3://$BUCKET/v2-parties/" --endpoint-url "$R2" || true) | awk '{print $4}' > parties.txt
+          (aws s3 ls "s3://$BUCKET/v2-chaine/" --endpoint-url "$R2" || true) | awk '{print $4}' > faits.txt
+          D=""; [ "$SEULS" != "prets" ] && D="$SEULS"
+          python3 relief-hd/paquets-prets.py parties.txt faits.txt "$D" >> "$GITHUB_OUTPUT"
+          tail -2 "$GITHUB_OUTPUT"
+
+  paquets:
+    needs: paquets-liste
+    if: always() && needs.paquets-liste.result == 'success' && needs.paquets-liste.outputs.n != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 36
+      matrix:
+        paquet: ${{ fromJson(needs.paquets-liste.outputs.paquets) }}
+    env:
+      P: ${{ matrix.paquet }}
+      PREFIXE: ${{ inputs.prefixe || 'v2' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # (même Node que le poste de Soulane, où les raccords ont été vérifiés octet pour octet)
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.15.0
+
+      - name: Parties brutes du paquet ${{ matrix.paquet }} et de ses voisines
+        run: |
+          set -euo pipefail
+          PX=${P%/*}; PY=${P#*/}
+          aws s3 ls "s3://$BUCKET/v2-parties/" --endpoint-url "$R2" | awk '{print $4}' > parties.txt
+          mkdir -p brutes
+          n=0
+          for y in $(seq $((4 * PY - 1)) $((4 * PY + 4))); do
+            for x in $(seq $((4 * PX - 1)) $((4 * PX + 4))); do
+              grep -qx "14_${x}_${y}.tar" parties.txt || continue
+              for i in 1 2 3; do aws s3 cp "s3://$BUCKET/v2-parties/14_${x}_${y}.tar" t.tar --endpoint-url "$R2" --only-show-errors && break; sleep 15; done
+              tar -xf t.tar -C brutes && rm t.tar
+              n=$((n + 1))
+            done
+          done
+          echo "$n tuiles rapatriées ; $(ls brutes | wc -l) fichiers, $(du -sh brutes | cut -f1)"
+
+      - name: Raccords et assemblage
+        run: |
+          set -euo pipefail
+          NODE_OPTIONS=--max-old-space-size=12288 node relief-hd/paquet-cloud.mjs relief-hd/paquet-raccords.mjs brutes travail sortie "$P"
+          ls -la sortie/12/*/
+
+      - name: Envoi sur R2 (index du paquet en dernier) et relecture
+        run: |
+          set -euo pipefail
+          PX=${P%/*}; PY=${P#*/}
+          D=sortie/12/$PX
+          put() { # $1 fichier, $2 clé : mêmes en-têtes que l'envoi du poste (wrangler)
+            for i in 1 2 3 4 5; do
+              aws s3 cp "$1" "s3://$BUCKET/$2" --endpoint-url "$R2" --only-show-errors \
+                --content-type application/octet-stream --cache-control 'public, max-age=86400' && break
+              [ $i = 5 ] && return 1; sleep $((i * 20))
+            done
+            L=$(stat -c %s "$1")
+            E=$(aws s3api head-object --bucket "$BUCKET" --key "$2" --endpoint-url "$R2" --query ContentLength --output text)
+            [ "$L" = "$E" ] || { echo "RELU DIFFÉRENT $2 : $L / $E"; return 1; }
+            echo "envoyé $2 ($L octets)"
+          }
+          [ -e "$D/$PY.srm" ] || { echo "pas d'index $D/$PY.srm"; exit 1; }
+          for f in $(ls "$D" | grep -vx "$PY.srm"); do put "$D/$f" "$PREFIXE/12/$PX/$f"; done
+          put "$D/$PY.srm" "$PREFIXE/12/$PX/$PY.srm"
+          if [ "$PREFIXE" = v2 ]; then
+            # relecture par l'adresse publique (celle de l'app)
+            curl -sSI "https://relief.soulane.net/v2/12/$PX/$PY.srm?relu=$(date +%s)" | grep -iE '^(HTTP|content-length|content-type|cache-control)'
+            echo "fait $(date -u +%FT%TZ) run $GITHUB_RUN_ID" | aws s3 cp - "s3://$BUCKET/v2-chaine/12_${PX}_${PY}.fait" --endpoint-url "$R2" --only-show-errors
+          fi
+
+  manifeste:
+    needs: paquets
+    if: always() && needs.paquets.result != 'skipped'
+    runs-on: ubuntu-latest
+    # (un seul manifeste écrit à la fois)
+    concurrency: relief-hd-manifeste
+    env:
+      PREFIXE: ${{ inputs.prefixe || 'v2' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Manifeste d'après R2, envoyé en dernier
+        run: |
+          set -euo pipefail
+          aws s3 ls "s3://$BUCKET/$PREFIXE/12/" --recursive --endpoint-url "$R2" | awk '{print $4}' > cles.txt
+          aws s3 cp "s3://$BUCKET/$PREFIXE/manifest.json" ancien.json --endpoint-url "$R2" --only-show-errors \
+            || echo '{"version":2,"packs":[],"trees":[]}' > ancien.json
+          python3 relief-hd/manifeste.py cles.txt ancien.json manifest.json > sortie.txt
+          cat sortie.txt
+          if grep -qx 'change=1' sortie.txt; then
+            aws s3 cp manifest.json "s3://$BUCKET/$PREFIXE/manifest.json" --endpoint-url "$R2" --only-show-errors \
+              --content-type application/json --cache-control 'public, max-age=300'
+            aws s3 cp "s3://$BUCKET/$PREFIXE/manifest.json" relu.json --endpoint-url "$R2" --only-show-errors
+            cmp manifest.json relu.json
+            if [ "$PREFIXE" = v2 ]; then
+              curl -sS "https://relief.soulane.net/v2/manifest.json?relu=$(date +%s)" -o public.json
+              cmp manifest.json public.json && echo "manifeste en ligne relu : identique"
+            fi
+          fi
+
+  suite:
+    needs: [liste, manifeste]
+    if: always() && needs.liste.outputs.reste != '' && vars.RELIEF_CHAINE == '1' && needs.manifeste.result != 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Lot suivant
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESTE: ${{ needs.liste.outputs.reste }}
+        run: gh workflow run relief-hd.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f lots="$RESTE" -f paquets=true
