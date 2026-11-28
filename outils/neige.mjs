@@ -50,6 +50,23 @@ var SnowAccumulator = class _SnowAccumulator {
     if (solid <= 0.02) return Math.max(tw2m, TW_LIQUID);
     return wetBulbForFraction(solid);
   }
+  /**
+   * Part de neige à `dz` mètres au-dessus du relief du modèle (au-dessous si négatif), EXACTEMENT sa part `solid` sur son
+   * relief. Quand il ne donne que de la pluie (ou que de la neige), la température humide équivalente est bornée
+   * (`anchoredWetBulb`) et la courbe en S laissait 2 % de neige sur son relief et dessous (ou 2 % de pluie) : de la neige
+   * sous une pluie franche, cumulée heure après heure (29pf, 28/11/2026 : 1 042 cm au lieu de 50 sur les heures de pluie
+   * seule de la prévision du 27/11 à 18 h UTC, et 207 cases du 25/11 à plus de 1 cm là où le modèle en donne moins de
+   * 0,5). La courbe est donc redressée de part et d'autre du relief : dessous, ramenée à zéro en proportion ; dessus,
+   * l'écart à « tout en neige » ramené de même. Sa forme (la distance de la limite) ne change pas, et dans le cas du
+   * mélange (le plus courant) elle est inchangée. Part inconnue : la courbe telle quelle.
+   */
+  static levelFraction(solid, tw, dz) {
+    const g = snowFraction(tw - WET_BULB_LAPSE * dz);
+    if (!Number.isFinite(solid)) return g;
+    const g0 = snowFraction(tw);
+    if (dz <= 0) return g0 > 0 ? g * (solid / g0) : 0;
+    return g0 < 1 ? 1 - (1 - g) * ((1 - solid) / (1 - g0)) : 1;
+  }
   /** Ajoute une heure. Une valeur manquante (hors du domaine) ne compte pas. */
   addHour(h) {
     const acc = this.acc;
@@ -60,11 +77,12 @@ var SnowAccumulator = class _SnowAccumulator {
       const tw2 = h.tw[c];
       const t2 = h.t[c];
       if (!Number.isFinite(tw2) || !Number.isFinite(t2) || !Number.isFinite(z) || z > MISSING) continue;
-      const tw = _SnowAccumulator.anchoredWetBulb(h.solid[c], tw2);
+      const solid = h.solid[c];
+      const tw = _SnowAccumulator.anchoredWetBulb(solid, tw2);
       const base = c * SNOW_LEVELS;
       for (let k = 0; k < SNOW_LEVELS; k++) {
         const dz = k * SNOW_LEVEL_STEP - z;
-        const f = snowFraction(tw - WET_BULB_LAPSE * dz);
+        const f = _SnowAccumulator.levelFraction(solid, tw, dz);
         if (f > 1e-3) acc[base + k] += p * f * freshSnowCmPerMm(t2 - AIR_LAPSE * dz);
       }
     }
@@ -186,6 +204,8 @@ function main() {
   if (!acc24) throw new Error("Fen\xEAtre de 24 h incompl\xE8te");
   let ours = 0;
   let maxOro48 = 0;
+  let visModel = 0;
+  let visOurs = 0;
   for (let c = 0; c < cells; c++) {
     const zk = Math.max(0, oro[c]) / SNOW_LEVEL_STEP;
     const k = Math.min(SNOW_LEVELS - 2, Math.floor(zk));
@@ -196,6 +216,10 @@ function main() {
     if (cellModel[c] > 0) {
       modelCm += cellModel[c];
       ours += v;
+    }
+    if (cellModel[c] >= 1) {
+      visModel += cellModel[c];
+      visOurs += v;
     }
   }
   const from = run + START_H * 36e5;
@@ -233,17 +257,21 @@ function main() {
     // Plus forte neige fraîche en 48 h sur le relief du modèle (le vrai relief peut monter plus haut).
     maxCmReliefModele: Math.round(maxOro48),
     // Rapport entre notre courbe lue sur le relief du modèle et sa neige (1 = mêmes cumuls) : un contrôle de la méthode.
-    controle: modelCm > 0 ? { neigeModeleCm: Math.round(modelCm), neigeSoulaneCm: Math.round(ours), rapport: Math.round(ours / modelCm * 100) / 100 } : null
+    controle: modelCm > 0 ? { neigeModeleCm: Math.round(modelCm), neigeSoulaneCm: Math.round(ours), rapport: Math.round(ours / modelCm * 100) / 100 } : null,
+    // Le même sur les cases à neige visible du modèle (information, ne bloque rien).
+    controleVisible: visModel > 0 ? { neigeModeleCm: Math.round(visModel), neigeSoulaneCm: Math.round(visOurs), rapport: Math.round(visOurs / visModel * 1e3) / 1e3 } : null
   };
   const doubts = [];
   if (gz.length > 6 * 1024 * 1024) doubts.push(`fichier de ${(gz.length / 1048576).toFixed(1)} Mo`);
   if (manifest.maxCmReliefModele > 400) doubts.push(`${manifest.maxCmReliefModele} cm en 48 h sur le relief du mod\xE8le`);
   if (manifest.controle && manifest.controle.neigeModeleCm > 2e3 && (manifest.controle.rapport < 0.85 || manifest.controle.rapport > 1.2))
-    doubts.push(`contr\xF4le \xE0 ${manifest.controle.rapport} (attendu : 1)`);
+    doubts.push(
+      `contr\xF4le \xE0 ${manifest.controle.rapport} (attendu : 1)` + (manifest.controleVisible ? `, ${manifest.controleVisible.rapport} sur la neige visible` : "")
+    );
   if (doubts.length) throw new Error(`Grille suspecte, pas publi\xE9e : ${doubts.join(" ; ")}`);
   writeFileSync(join(out, "manifeste.json"), JSON.stringify(manifest, null, 1));
   console.log(
-    `Neige pr\xE9vue ${header.run} : ${(gz.length / 1024).toFixed(0)} Ko (brut ${(raw.length / 1024).toFixed(0)} Ko), au plus ${manifest.maxCmReliefModele} cm en 48 h sur le relief du mod\xE8le` + (manifest.controle ? ` ; contr\xF4le : ${manifest.controle.rapport} (1 = comme le mod\xE8le)` : "")
+    `Neige pr\xE9vue ${header.run} : ${(gz.length / 1024).toFixed(0)} Ko (brut ${(raw.length / 1024).toFixed(0)} Ko), au plus ${manifest.maxCmReliefModele} cm en 48 h sur le relief du mod\xE8le` + (manifest.controle ? ` ; contr\xF4le : ${manifest.controle.rapport} (1 = comme le mod\xE8le)` : "") + (manifest.controleVisible ? ` ; sur la neige visible : ${manifest.controleVisible.rapport}` : "")
   );
 }
 main();
