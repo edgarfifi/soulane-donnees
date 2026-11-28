@@ -1,0 +1,32 @@
+{
+ "jeu": "neige-prevue",
+ "prevision": "2026-11-28T12:00:00Z",
+ "modele": "AROME 0,025° (Météo-France)",
+ "fenetres": [
+  {
+   "id": "24",
+   "from": "2026-11-28T15:00:00Z",
+   "to": "2026-11-29T15:00:00Z"
+  },
+  {
+   "id": "48",
+   "from": "2026-11-28T15:00:00Z",
+   "to": "2026-11-30T15:00:00Z"
+  }
+ ],
+ "fabrique": "2026-11-28T16:24:15.634Z",
+ "octets": 193297,
+ "brut": 11806522,
+ "empreinte": "3bf52512d9230b0bfffe1a0fabc6943d",
+ "maxCmReliefModele": 7,
+ "controle": {
+  "neigeModeleCm": 10146,
+  "neigeSoulaneCm": 11398,
+  "rapport": 1.12
+ },
+ "controleVisible": {
+  "neigeModeleCm": 5174,
+  "neigeSoulaneCm": 5120,
+  "rapport": 0.989
+ }
+}
