@@ -258,15 +258,16 @@ function main() {
     maxCmReliefModele: Math.round(maxOro48),
     // Rapport entre notre courbe lue sur le relief du modèle et sa neige (1 = mêmes cumuls) : un contrôle de la méthode.
     controle: modelCm > 0 ? { neigeModeleCm: Math.round(modelCm), neigeSoulaneCm: Math.round(ours), rapport: Math.round(ours / modelCm * 100) / 100 } : null,
-    // Le même sur les cases à neige visible du modèle (information, ne bloque rien).
+    // Le même sur les cases à neige VISIBLE du modèle (1 cm et plus en 48 h) : c'est lui qui décide (règle du 28/11/2026,
+    // accord d'Edgar) ; le contrôle sur toutes les cases ci-dessus reste écrit, pour information.
     controleVisible: visModel > 0 ? { neigeModeleCm: Math.round(visModel), neigeSoulaneCm: Math.round(visOurs), rapport: Math.round(visOurs / visModel * 1e3) / 1e3 } : null
   };
   const doubts = [];
   if (gz.length > 6 * 1024 * 1024) doubts.push(`fichier de ${(gz.length / 1048576).toFixed(1)} Mo`);
   if (manifest.maxCmReliefModele > 400) doubts.push(`${manifest.maxCmReliefModele} cm en 48 h sur le relief du mod\xE8le`);
-  if (manifest.controle && manifest.controle.neigeModeleCm > 2e3 && (manifest.controle.rapport < 0.85 || manifest.controle.rapport > 1.2))
+  if (manifest.controleVisible && manifest.controleVisible.neigeModeleCm >= 1e3 && (manifest.controleVisible.rapport < 0.9 || manifest.controleVisible.rapport > 1.1))
     doubts.push(
-      `contr\xF4le \xE0 ${manifest.controle.rapport} (attendu : 1)` + (manifest.controleVisible ? `, ${manifest.controleVisible.rapport} sur la neige visible` : "")
+      `contr\xF4le \xE0 ${manifest.controleVisible.rapport} sur la neige visible (attendu : 1, de 0,9 \xE0 1,1)` + (manifest.controle ? ` ; ${manifest.controle.rapport} sur toutes les cases` : "")
     );
   if (doubts.length) throw new Error(`Grille suspecte, pas publi\xE9e : ${doubts.join(" ; ")}`);
   writeFileSync(join(out, "manifeste.json"), JSON.stringify(manifest, null, 1));
